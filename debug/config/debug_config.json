@@ -1,0 +1,16 @@
+{
+    "network" : {
+        "channels" : 16,
+        "init_cmd" : [ 135.0 , 90.0 ],
+        "actuation_range" : [ 270, 180 ], 
+        "min_max_pwr" : [ [500, 2500], [500,2500] ],
+        "safety_bounds" : [ null, [10,170] ]
+    },
+    "camera" : {
+        "resolution" : [1280,800],
+        "lidar_resolution" : [1280,720],
+        "fps" : 30,
+        "lidar_fps" : 30
+    },
+    "controller" : {}
+}
