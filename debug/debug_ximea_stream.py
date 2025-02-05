@@ -1,15 +1,6 @@
-
-import os
-import sys
 import cv2
-from time import sleep
-
-from rohan.common.logging import Logger
-# os.system('cat /sys/module/usbcore/parameters/usbfs_memory_mb')
-# os.system("/bin/bash -c 'tee /sys/module/usbcore/parameters/usbfs_memory_mb >/dev/null <<<0'")
-# os.system('cat /sys/module/usbcore/parameters/usbfs_memory_mb')
-
-from theodwynbyebye.cameras.ximea_cam                 import XIMEA
+from rohan.common.logging                       import Logger
+from theodwyn.cameras.ximea_cam                 import XIMEA
 
 if __name__ == "__main__":
     with Logger() as logger:
