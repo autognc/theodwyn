@@ -7,6 +7,8 @@ from rohan.common.logging               import Logger
 from rohan.common.type_aliases          import Config, Resolution
 from typing                             import TypeVar, Optional, Tuple, Dict
 from numpy.typing                       import NDArray
+import yaml
+import os 
 
 
 
@@ -42,7 +44,7 @@ class XIMEA(ThreadedCameraBase):
         resolution          : Resolution            = (1280,800),
         fps                 : int                   = 30,
         stream_resolution   : Optional[Resolution]  = None,
-        exposure            : int                   = 30000,  # grab from config
+        exposure            : int                   = 10000,
         gstream_config      : Config                = None,
         logger              : Optional[Logger]      = None,
         **config_kwargs
@@ -98,26 +100,53 @@ class XIMEA(ThreadedCameraBase):
         """
         Connect to the CV video stream
         """
+
+        """Load Configuration File"""
+        current_dir = os.path.dirname(__file__)
+        parent_dir = os.path.dirname(os.path.dirname(current_dir))
+
+        config_path = os.path.join(parent_dir,'debug', 'config', 'ximea_config.yml')
+
+        with open(config_path, 'r') as config_file:
+            config = yaml.safe_load(config_file)
+        cam_config = config.get('Camera Settings',{})
+        resolution = cam_config.get('resolution')
+
         if isinstance( self.capture_obj, xiapi.Camera ):
             self.capture_obj.close_device()
-        # pipleine_cfg        = rs.config()
-        # pipleine_cfg.enable_stream( rs.stream.color, *self.resolution, rs.format.bgr8, self.fps )
         self.capture_obj    = xiapi.Camera()
         self.capture_obj.open_device()
         
 
-        #Need to define all camera settings in config file 
-        # self.capture_obj.set_imgdataformat('XI_RGB24')
-        self.capture_obj.set_framerate(self.fps)
-        self.capture_obj.set_exposure(self.exposure)
-        # self.capture_obj.set_param("height",self.stream_resolution[0])
-        # self.capture_obj.set_param("width",self.stream_resolution[1])
-        # self.capture_obj.set_gain(10)
-        # self.capture_obj.set_acq_transport_buffer_size(32)
+        """Defining Camera Settings from Configuration File"""
+        self.capture_obj.set_framerate(cam_config.get('framerate', self.fps))
+        self.capture_obj.set_height(resolution.get('height', self.stream_resolution[0]))
+        self.capture_obj.set_width(resolution.get('width', self.stream_resolution[1]))
+        #self.capture_obj.set_imgdataformat(cam_config.get('imgdataformat'))
+        try:
+            if cam_config.get('aeg') == True:
+                self.capture_obj.enable_aeag()
+                self.capture_obj.set_ae_max_limit(cam_config.get('ae_max_limit'))
+                self.capture_obj.set_ag_max_limit(cam_config.get('ag_max_limit'))
+            else:
+                self.capture_obj.disable_aeag()
+                self.capture_obj.set_exposure(cam_config.get('exposure', self.exposure))
+                self.capture_obj.set_gain(cam_config.get('gain'))
+        except NameError:
+            "Exposure/Gain setting not defined in configuration file"
+
+        try:
+            if cam_config.get('awb') == True:
+                self.capture_obj.enable_auto_wb()
+            else:
+                self.capture_obj.disable_auto_wb()
+                self.capture_obj.set_wb_kr(cam_config.get('wb_coef_red'))
+                self.capture_obj.set_wb_kg(cam_config.get('wb_coef_green'))
+                self.capture_obj.set_wb_kb(cam_config.get('wb_coef_blue'))
+        except NameError:
+            "White Balance setting not defined in configuration file"
 
         self.capture_obj.start_acquisition()
-        # img = xiapi.Image()
-        # self.capture_obj.get_image(img)
 
 
         if self.gstream_pipeline is not None:
@@ -172,17 +201,7 @@ class XIMEA(ThreadedCameraBase):
             if frame is not None and isinstance( self.stream_obj, cv.VideoWriter ):
                 if self.stream_obj.isOpened():
                     with self._instance_lock:
-                        if   self.stream_channel == 0 : 
                             self.stream_obj.write( image=cv.resize( self.frame_data, self.stream_resolution) )
-
-
-    def switch_channel( self ):
-        """
-        Switches streamed channel from RGB to Depth and Visa-Versa
-        """
-        with self._instance_lock:
-            self.stream_channel = int( not bool(self.stream_channel) )
-
 
     def get_frame( self ) -> Tuple[ cv.typing.MatLike, cv.typing.MatLike ]:
         """

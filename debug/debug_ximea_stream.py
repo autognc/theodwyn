@@ -6,7 +6,10 @@ if __name__ == "__main__":
     with Logger() as logger:
         with XIMEA(logger=logger) as camera:
             while True: 
-                cv2.imshow("test",camera.get_frame())
+                cv2.imshow("XIMEA Stream",camera.get_frame())
                 cv2.waitKey(1)
-            
+                # Check if the window is closed
+                if cv2.getWindowProperty('XIMEA Stream', cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            cv2.destroyAllWindows()
         

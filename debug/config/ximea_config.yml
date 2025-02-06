@@ -1,0 +1,17 @@
+Camera Settings:
+  framerate: 30
+  resolution: 
+    width: 1280
+    height: 1024
+  exposure: 100000 # [microseconds]
+  gain: 0 # manual gain
+  imgdataformat: "XI_RGB24"
+  awb: true # auto white balance
+  aeg: false # auto exposure/gain
+  ag_max_limit: 10 # max gain limit
+  ae_max_limit: 100000 # max exposure limit
+  wb_coef_red: 1.0
+  wb_coef_green: 1.0
+  wb_coef_blue: 1.0
+
+
