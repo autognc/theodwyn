@@ -7,15 +7,11 @@ from rohan.common.logging               import Logger
 from rohan.common.type_aliases          import Config, Resolution
 from typing                             import TypeVar, Optional, Tuple, Dict
 from numpy.typing                       import NDArray
-import yaml
-import os 
-
-
 
 SelfXIMEA = TypeVar("SelfXIMEA", bound="XIMEA" )
 class XIMEA(ThreadedCameraBase):
     """
-    Model for an Intel D455 Realsense Camera.
+    Model for a Ximea Camera.
     :param resolution: The resolution of the camera's rgb channels
     :param lidar_resolution: The resolution of the camera's depth channel
     :param fps: The fps of the camera's channels
@@ -29,22 +25,23 @@ class XIMEA(ThreadedCameraBase):
     
     # Capture object used to connect to ximea I/O
     capture_obj      : Optional[xiapi.Camera]    = None
+    aeg_settings     : Optional[Dict[str,int]]   = None
+    awb_settings     : Optional[Dict[str,int]]   = None
     
     # Stream object used to stream camera data
     stream_obj       : Optional[cv.VideoWriter] = None
     gstream_pipeline : Optional[str]            = None
     stream_channel   : int                      = 0
     stream_resolution: Optional[Resolution]     = None
-    frame_color      : Optional[NDArray]        = None
-    frame_depth      : Optional[NDArray]        = None
     frame_data       : Optional[NDArray]        = np.zeros((1280,800))
 
     def __init__(
         self,
         resolution          : Resolution            = (1280,800),
         fps                 : int                   = 30,
+        aeg_settings        : Dict[str,int]         = None,
+        awb_settings        : Dict[str,int]         = None,
         stream_resolution   : Optional[Resolution]  = None,
-        exposure            : int                   = 10000,
         gstream_config      : Config                = None,
         logger              : Optional[Logger]      = None,
         **config_kwargs
@@ -55,14 +52,14 @@ class XIMEA(ThreadedCameraBase):
             fps=fps,
             logger=logger
         )
+        self.aeg_settings = aeg_settings
+        self.awb_settings = awb_settings
         self.stream_resolution = stream_resolution if not stream_resolution is None else resolution
-        self.exposure = exposure
         self.load( 
             gstream_config=gstream_config,
             **config_kwargs 
         )
         self.add_threaded_method( target=self.spin )
-
 
     def load( 
         self, 
@@ -91,6 +88,7 @@ class XIMEA(ThreadedCameraBase):
                 sink_port,
                 sink_ip
             )
+
         if 'gstream_config' in kwargs:
             self.gstream_pipeline = build_gstreamer_pipeline( **kwargs['gstream_config'] ) if isinstance(kwargs['gstream_config'],Dict) else None
         ThreadedCameraBase.load(self,**kwargs)
@@ -101,53 +99,49 @@ class XIMEA(ThreadedCameraBase):
         Connect to the CV video stream
         """
 
-        """Load Configuration File"""
-        current_dir = os.path.dirname(__file__)
-        parent_dir = os.path.dirname(os.path.dirname(current_dir))
-
-        config_path = os.path.join(parent_dir,'debug', 'config', 'ximea_config.yml')
-
-        with open(config_path, 'r') as config_file:
-            config = yaml.safe_load(config_file)
-        cam_config = config.get('Camera Settings',{})
-        resolution = cam_config.get('resolution')
-
         if isinstance( self.capture_obj, xiapi.Camera ):
             self.capture_obj.close_device()
-        self.capture_obj    = xiapi.Camera()
+        self.capture_obj = xiapi.Camera()
         self.capture_obj.open_device()
-        
 
-        """Defining Camera Settings from Configuration File"""
-        self.capture_obj.set_framerate(cam_config.get('framerate', self.fps))
-        self.capture_obj.set_height(resolution.get('height', self.stream_resolution[0]))
-        self.capture_obj.set_width(resolution.get('width', self.stream_resolution[1]))
-        #self.capture_obj.set_imgdataformat(cam_config.get('imgdataformat'))
-        try:
-            if cam_config.get('aeg') == True:
+        self.capture_obj.set_framerate( self.fps            )
+        self.capture_obj.set_width(     self.resolution[0]  )
+        self.capture_obj.set_height(    self.resolution[1]  )
+
+        if self.aeg_settings is not None:
+            if 'ae_max_limit' in self.aeg_settings and 'ag_max_limit' in self.aeg_settings:
                 self.capture_obj.enable_aeag()
-                self.capture_obj.set_ae_max_limit(cam_config.get('ae_max_limit'))
-                self.capture_obj.set_ag_max_limit(cam_config.get('ag_max_limit'))
-            else:
+                self.capture_obj.set_ae_max_limit( self.aeg_settings['ae_max_limit'] )
+                self.capture_obj.set_ag_max_limit( self.aeg_settings['ag_max_limit'] )
+            elif 'exposure' in self.aeg_settings and 'gain' in self.aeg_settings:
                 self.capture_obj.disable_aeag()
-                self.capture_obj.set_exposure(cam_config.get('exposure', self.exposure))
-                self.capture_obj.set_gain(cam_config.get('gain'))
-        except NameError:
-            "Exposure/Gain setting not defined in configuration file"
+                self.capture_obj.set_exposure(  self.aeg_settings['exposure'] )
+                self.capture_obj.set_gain(      self.aeg_settings['gain']     )
+            else:        
+                if isinstance(self.logger,Logger): 
+                    self.logger.write(
+                        "Exposure/Gain setting not defined in configuration file",
+                        process_name=self.process_name
+                    )    
+        else:        
+            if isinstance(self.logger,Logger): 
+                self.logger.write(
+                    "Exposure/Gain setting not defined in configuration file",
+                    process_name=self.process_name
+                )    
 
-        try:
-            if cam_config.get('awb') == True:
-                self.capture_obj.enable_auto_wb()
-            else:
+        if self.awb_settings is not None:
+            if 'wb_coef_red' in self.aeg_settings and 'wb_coef_green' in self.aeg_settings and 'wb_coef_blue' in self.aeg_settings:
                 self.capture_obj.disable_auto_wb()
-                self.capture_obj.set_wb_kr(cam_config.get('wb_coef_red'))
-                self.capture_obj.set_wb_kg(cam_config.get('wb_coef_green'))
-                self.capture_obj.set_wb_kb(cam_config.get('wb_coef_blue'))
-        except NameError:
-            "White Balance setting not defined in configuration file"
+                self.capture_obj.set_wb_kr( self.aeg_settings['wb_coef_red']    )
+                self.capture_obj.set_wb_kg( self.aeg_settings['wb_coef_green']  )
+                self.capture_obj.set_wb_kb( self.aeg_settings['wb_coef_blue']   )
+            else:
+                self.capture_obj.enable_auto_wb()
+        else:
+            self.capture_obj.enable_auto_wb()
 
         self.capture_obj.start_acquisition()
-
 
         if self.gstream_pipeline is not None:
             if isinstance( self.stream_obj, cv.VideoWriter ):

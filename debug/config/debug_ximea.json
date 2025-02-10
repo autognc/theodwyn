@@ -1,0 +1,16 @@
+{
+    "resolution" : [1280,1024],
+    "stream_resolution" : [640,512],
+    "fps" : 30,
+    "aeg_settings" : {
+        "ag_max_limit"  : 10,
+        "ae_max_limit"  : 100000,
+        "exposure"      : 100000,
+        "gain"          : 0
+    },
+    "awb_settings" : {
+        "wb_coef_red"   : 1.0,
+        "wb_coef_green" : 1.0,
+        "wb_coef_blue"  : 1.0
+    }
+}
