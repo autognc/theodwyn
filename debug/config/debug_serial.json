@@ -1,0 +1,16 @@
+[
+    {
+        "port"      : "",
+        "port_config" : {
+            "baudrate" : 9600,
+            "stopbits" : 1
+        }
+    },
+    {
+        "port"      : "",
+        "port_config" : {
+            "baudrate" : 9600,
+            "stopbits" : 1
+        }
+    }
+]

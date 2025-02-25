@@ -169,6 +169,12 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# File prefixes to ignore
 hide_*
 log_*
 image_*
+
+# File types to ignore
+*.csv
+ 

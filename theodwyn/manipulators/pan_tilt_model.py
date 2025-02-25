@@ -1,11 +1,12 @@
-import numpy as np
+import numpy                            as np
 from math                               import cos, sin
+from rohan.common.base                  import _RohanBase
 from numpy.typing                       import NDArray
 from typing                             import Union, TypeVar, List
 from rohan.common.type_aliases          import Joints
 
 SelfPanTiltModel = TypeVar("SelfPanTiltModel", bound="PanTiltModel" )
-class PanTiltModel:
+class PanTiltModel(_RohanBase):
 
     """
     The manipulator robotic model for a pan-tilt (PT) servo-ed system.

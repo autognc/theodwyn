@@ -1,7 +1,7 @@
 import cv2
 import json
-from rohan.common.logging                       import Logger
-from theodwyn.cameras.ximea_cam                 import XIMEA
+from rohan.common.logging        import Logger
+from theodwyn.cameras.ximea      import XIMEA
 
 if __name__ == "__main__":
 
