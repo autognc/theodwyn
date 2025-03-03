@@ -40,9 +40,9 @@ class Mechanum4Wheels(_RohanBase):
         inv_wr  = 1/self.wheel_radius
         return inv_wr * np.array(
             [
-                [ 1 , -1  , -lsum ],
+                [ 1 , -1  ,  lsum ],
                 [ 1 ,  1  ,  lsum ],
                 [ 1 ,  1  , -lsum ],
-                [ 1 , -1  ,  lsum ]
+                [ 1 , -1  , -lsum ]
             ]
         )
