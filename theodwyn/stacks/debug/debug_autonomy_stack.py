@@ -2,6 +2,7 @@ import numpy                                    as     np
 from math                                       import sqrt
 from rohan.common.base_stacks                   import StackBase
 from rohan.data.classes                         import StackConfiguration
+from rohan.common.logging                       import Logger
 from theodwyn.networks.adafruit                 import Adafruit_PCA9685
 from theodwyn.networks.vicon                    import ViconConnection
 from theodwyn.networks.comm_prot                import ZMQDish
@@ -57,7 +58,8 @@ class DebugAutoStack(StackBase):
         self, 
         network    : Optional[ List[Union[ViconConnection,Adafruit_PCA9685,SabertoothSimpleSerial]] ]   = None, 
         camera     : Optional[D455]                                                                     = None, 
-        controller : Optional[Any]                                                                      = None
+        controller : Optional[Any]                                                                      = None,
+        logger     : Optional[Logger]                                                                   = None
     ) -> None:
 
         frame_color, frame_depth = None, None

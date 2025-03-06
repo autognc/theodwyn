@@ -4,6 +4,7 @@ from theodwyn.networks.sabertooth               import SabertoothSimpleSerial
 from theodwyn.cameras.ximea                     import XIMEA
 from theodwyn.networks.adafruit                 import Adafruit_PCA9685
 from theodwyn.networks.comm_prot                import ZMQDish
+from theodwyn.networks.vicon                    import ViconConnection
 from theodwyn.stacks.debug.debug_imcoll         import DebugImColl
 from rohan.data.classes                         import StackConfiguration
 from time                                       import time
@@ -22,8 +23,8 @@ if __name__ == "__main__":
     config.network_configs[1]["SDA"] = board.SDA
     config.network_configs[1]["SCL"] = board.SCL
 
-    # config.camera_classes = XIMEA
-    config.network_classes = [ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,SabertoothSimpleSerial]
+    config.camera_classes = XIMEA
+    config.network_classes = [ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,SabertoothSimpleSerial,ViconConnection]
 
     stack = DebugImColl( config=config, verbose=False )
     stack.spin()
