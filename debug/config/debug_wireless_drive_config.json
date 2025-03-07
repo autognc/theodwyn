@@ -3,7 +3,7 @@
        {
             "addr"  : "udp://192.168.1.48:5555",
             "data_format" : "17f",
-            "topic" : "XboxWirelessController",
+            "topic" : "xwc",
             "timeo" : 500
         },
         {
