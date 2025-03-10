@@ -1,9 +1,9 @@
-import pyvicon_datastream           as pv
-from pyvicon_datastream.tools       import ObjectTracker
-from rohan.common.base_networks     import NetworkBase
-from rohan.common.logging           import Logger
-from typing                         import Optional, List
-from dataclasses                    import dataclass, field
+import pyvicon_datastream          as pv
+from pyvicon_datastream.tools      import ObjectTrackerQUATERNION
+from rohan.common.base_networks    import NetworkBase
+from rohan.common.logging          import Logger
+from typing                        import Optional, List
+from dataclasses                   import dataclass, field
 
 # TODO: Add Additional Output Data Options
 @dataclass
@@ -12,10 +12,9 @@ class ViconData:
     latency             : Optional[int]     = None
     framenumber         : Optional[int]     = None
     position            : Optional[List]    = field(default_factory=list)
-    orientation_euler   : Optional[List]    = field(default_factory=list)
+    orientation_quat    : Optional[List]    = field(default_factory=list)
 
-
-class _ViconObjectTracker( ObjectTracker ):
+class _ViconObjectTracker( ObjectTrackerQUATERNION ):
     def __init__( self, ip ):
         self.ip = ip
         self.is_connected = False
@@ -107,5 +106,5 @@ class ViconConnection( NetworkBase ):
                 data.latency                = latency
                 data.framenumber            = framenumber
                 data.position               = list( pose[0:3] )
-                data.orientation_euler      = list( pose[3:6] )
+                data.orientation_quat       = list( pose[3:7] )
         return data

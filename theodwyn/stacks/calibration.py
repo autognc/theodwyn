@@ -25,7 +25,7 @@ CSVFOLDER_PATH      = f"{HOME_DIR}/{SAVE_DIR}"
 if not os.path.exists(CSVFOLDER_PATH): 
     os.makedirs(CSVFOLDER_PATH,exist_ok=True)
 CSV_FILENAME        = f"{CSVFOLDER_PATH}/calibration_{TIME_AR}.csv" 
-CSV_FIELDNAMES      = ["set","cmd_0","cmd_1","cmd_2","cmd_3","x","y","z","roll","pitch", "yaw"]
+CSV_FIELDNAMES      = ["set","cmd_0","cmd_1","cmd_2","cmd_3","x","y","z","w","i", "j","k"]
 
 # >> CALIBRATION PREFERENCES
 CALIBRATION_THROTTLES       = [0.10,-0.10,0.25,-0.25]
@@ -202,7 +202,7 @@ class CalibrationStack(ThreadedStackBase):
 
                 if vicon_data.succeeded:
                     vicon_position      = vicon_data.position
-                    vicon_orientation   = vicon_data.orientation_euler
+                    vicon_orientation   = vicon_data.orientation_quat
                     vicon_data          = (vicon_position, vicon_orientation)
                     c_set               = self.calibration_set if self.control_mode else "M"
                     self.processing_queue.put( (c_set, wheel_throttles, vicon_data) )                    

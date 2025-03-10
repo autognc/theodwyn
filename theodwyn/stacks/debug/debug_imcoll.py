@@ -32,7 +32,9 @@ TRIGGER_HOLDTIME  = [ 2. ]
 MAX_THROTTLE      = 0.50
 MAX_OMEGA         = 2*pi/5 # rad/s
 SQRT2O2           = sqrt(2)/2
-OBJECT_NAME       = "eomer"
+OBJECT1_NAME      = "eomer"
+OBJECT2_NAME      = "soho"
+OBJECTS = [OBJECT1_NAME, OBJECT2_NAME]
 MAX_QUEUE_SIZE    = 100
 
 # DATA Collection constants
@@ -46,8 +48,10 @@ if not os.path.exists(MULTI_VICON_FOLDER):  make = os.makedirs(MULTI_VICON_FOLDE
 if not os.path.exists(SINGLE_VICON_FOLDER): make = os.makedirs(SINGLE_VICON_FOLDER,exist_ok=True)
 CSV_FILENAME_MC    = f"{MULTI_VICON_FOLDER}/vicon_mc_{TIME_AR}.csv" 
 CSV_FILENAME_SC    = f"{SINGLE_VICON_FOLDER}/vicon_sc_{TIME_AR}.csv"
-CSV_FIELDNAMES_MC  = ["ID","x","y","z","roll","pitch", "yaw"]
-CSV_FIELDNAMES_SC  = CSV_FIELDNAMES_MC
+# TODO: Add a fieldname creator that is agnostic to the number of objects
+CSV_FIELDNAMES_MC  = ["Set","ID",OBJECT1_NAME, "x","y","z","w","i", "j", "k",
+                      OBJECT2_NAME, "x","y","z","w","i", "j", "k"]
+CSV_FIELDNAMES_SC  = CSV_FIELDNAMES_MC[1:]
 
 class DebugImColl(ThreadedStackBase):
     """
@@ -91,10 +95,10 @@ class DebugImColl(ThreadedStackBase):
         self.capture_flag     = threading.Event()
         self.capture_switch   = threading.Event()
         self.processing_queue = Queue(maxsize=MAX_QUEUE_SIZE)
-        self.add_threaded_method( target=self.image_saving )
+        self.add_threaded_method( target=self.data_saving )
 
 
-    def image_saving(self):
+    def data_saving(self):
         with    CSVWriter(filename=CSV_FILENAME_MC,fieldnames=CSV_FIELDNAMES_MC) as csv_writer_mc, \
                 CSVWriter(filename=CSV_FILENAME_SC,fieldnames=CSV_FIELDNAMES_SC) as csv_writer_sc:
             
@@ -102,7 +106,7 @@ class DebugImColl(ThreadedStackBase):
             capture_flag_switched_on  = False
             while not self.sigterm.is_set():
                 while not self.processing_queue.empty():
-                    frame, vicon_data = self.processing_queue.get()
+                    frame, merged_vicon_data = self.processing_queue.get()
 
                     if not capture_flag_switched_on and self.capture_flag.is_set():
                         capture_flag_switched_on = True
@@ -115,13 +119,20 @@ class DebugImColl(ThreadedStackBase):
 
                         if not self.capture_switch.is_set():
                             # SAVE IMAGE AND CSV
-                            multi_image_captured = cv2.imwrite(f"{MULTI_IMAGE_FOLDER}/Set_{set}_XIMEAmulticapture_{str(count_multi+1).zfill(5)}.jpg", frame)
-                            vicon_data_out = [f"{str(count_multi+1).zfill(5)}"] + list(vicon_data[0]) + list(vicon_data[1])
+                            multi_image_captured = cv2.imwrite(f"{MULTI_IMAGE_FOLDER}/Set_{str(set).zfill(5)}_XIMEAmulticapture_{str(count_multi+1).zfill(5)}.jpg", frame)
+                            vicon_data_out = [  
+                                str(set).zfill(5),
+                                f"{str(count_multi+1).zfill(5)}",
+                                OBJECTS[0],
+                                *merged_vicon_data[0],
+                                OBJECTS[1],
+                                *merged_vicon_data[1]
+                            ]
                             csv_writer_mc.write_data(vicon_data_out)
 
                             # Log Confirmation
-                            if multi_image_captured and count_multi == 0:  
-                                ret_msg = f"Image set {set} captured" if set == 1 else f"Image set {set} captured"
+                            if multi_image_captured:  
+                                ret_msg = f"Image ({set},{count_multi}) captured"
                             else:
                                 ret_msg = f"Image set not captured"
                             self.logger.write( ret_msg, process_name=self.process_name)
@@ -132,19 +143,22 @@ class DebugImColl(ThreadedStackBase):
                             self.capture_switch.clear() 
                             self.capture_flag.clear()
 
-                            single_image_captured = cv2.imwrite(f"{SINGLE_IMAGE_FOLDER}/_XIMEAsinglecapture_{str(count_single +1).zfill(5)}.jpg", frame)
-                            vicon_data_out = [f"{str(count_single +1).zfill(5)}"] + list(vicon_data[0]) + list(vicon_data[1])
+                            single_image_captured = cv2.imwrite(f"{SINGLE_IMAGE_FOLDER}/_XIMEAsinglecapture_{str(count_single+1).zfill(5)}.jpg", frame)
+                            vicon_data_out = [  
+                                f"{str(count_single+1).zfill(5)}",
+                                OBJECTS[0],
+                                *merged_vicon_data[0],
+                                OBJECTS[1],
+                                *merged_vicon_data[1]
+                            ]
                             csv_writer_sc.write_data(vicon_data_out)
 
-                            if single_image_captured and count_multi == 0:  
-                                ret_msg = f"Image {count_single +1} captured" if set == 1 else f"Image {count_single +1} captured"
+                            if single_image_captured:  
+                                ret_msg = f"Image {count_single +1} captured"
                             else:
                                 ret_msg = f"Image set not captured"
                             self.logger.write( ret_msg, process_name=self.process_name)
                             count_single +=1
-
-                    
-
 
     def process( 
         self, 
@@ -153,20 +167,28 @@ class DebugImColl(ThreadedStackBase):
         controller : Optional[Any]                                                              = None,
         logger     : Optional[Logger]                                                           = None
     ) -> None:
+        
+        def get_objects_vicondata() -> None:
+            merged_data = len(OBJECTS)*[None]
+            succeeded = True
+            for i,object_name in enumerate(OBJECTS):
+                vicon_data      = network[4].recv_pose( object_name=object_name )
+                merged_data[i]  = [ *vicon_data.position, *vicon_data.orientation_quat ]
+                if succeeded and not vicon_data.succeeded: 
+                    succeeded = False
+                    break
+            return merged_data, succeeded
 
-        if self.capture_flag.is_set() and isinstance( camera, XIMEA ):
+
+        if self.capture_flag.is_set() and camera: # and isinstance( camera, XIMEA ):
             frame = camera.get_frame()
 
-            if len(network)>4 and isinstance( network[4], ViconConnection ):
-                vicon_data = network[4].recv_pose( object_name=OBJECT_NAME )
+            if len(network)>4 and network[4]: # isinstance( network[4], ViconConnection ):
+                merged_vicon_data, succeeded = get_objects_vicondata()
+                if succeeded: 
+                    self.processing_queue.put( (frame, merged_vicon_data) )                    
 
-                if vicon_data.succeeded:
-                    vicon_position      = vicon_data.position
-                    vicon_orientation   = vicon_data.orientation_euler
-                    vicon_data          = (vicon_position, vicon_orientation)
-                    self.processing_queue.put( (frame, vicon_data) )                    
-
-        if len(network)>0 and isinstance( network[0], ZMQDish ):
+        if len(network)>0 and network[0]: # isinstance( network[0], ZMQDish ):
             _, control_input = network[0].recv()
 
             if control_input is None:
@@ -198,7 +220,7 @@ class DebugImColl(ThreadedStackBase):
                     self.capture_switch.set()
                 
                 # Controller
-                if len(network)>1 and isinstance( network[1], Adafruit_PCA9685 ):
+                if len(network)>1 and network[1]: # isinstance( network[1], Adafruit_PCA9685 ):
                     r_analog  = control_input[3:5]
                     pan_command, tilt_command = network[1].servokit.servo[0].angle , network[1].servokit.servo[1].angle
                     if abs(r_analog[0]) > 0.2: pan_command += self.cntl_factor * -r_analog[0]
@@ -206,7 +228,7 @@ class DebugImColl(ThreadedStackBase):
                     command = [ pan_command, tilt_command ]
                     network[1].send( cmd = command )
 
-                if len(network)>3 and isinstance( network[2], SabertoothSimpleSerial ) and isinstance( network[3], SabertoothSimpleSerial ):
+                if len(network)>3 and network[2] and network[3]: # isinstance( network[2], SabertoothSimpleSerial ) and isinstance( network[3], SabertoothSimpleSerial ):
                     l_analog     = control_input[0:2]
                     bumper_diff  = control_input[10] - control_input[11]
                     v = np.zeros((3,1)).flatten()
