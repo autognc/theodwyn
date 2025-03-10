@@ -1,0 +1,38 @@
+{
+    "network" : [
+       {
+            "addr"  : "udp://192.168.1.48:5555",
+            "data_format" : "17f",
+            "topic" : "xwc",
+            "timeo" : 100
+        },
+        {
+            "channels" : 16,
+            "init_cmd" : [ 135.0 , 90.0 ],
+            "actuation_range" : [ 270, 180 ], 
+            "min_max_pwr" : [ [500, 2500], [500,2500] ],
+            "safety_bounds" : [ null, [10,170] ]
+        },
+        {
+            "port"      : "/dev/ttyUSB0",
+            "port_config" : {
+                "baudrate" : 9600,
+                "stopbits" : 1
+            },
+            "min_interval"  : 0.00005
+        },
+        {
+            "port"      : "/dev/ttyUSB1",
+            "port_config" : {
+                "baudrate" : 9600,
+                "stopbits" : 1
+            },
+            "min_interval"  : 0.00005
+        },
+        {
+            "host_addr" : "192.168.1.100"
+        }
+    ],
+    "camera" : {},
+    "controller" : {}
+}
