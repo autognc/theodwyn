@@ -177,4 +177,5 @@ image_*
 
 # File types to ignore
 *.csv
- 
+*.jpg
+*.png
