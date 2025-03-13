@@ -18,6 +18,7 @@ from typing                                     import Optional, List, Union, An
 from time                                       import time
 from queue                                      import Queue
 from rohan.utils.timers                         import IntervalTimer
+from copy                                       import deepcopy
 
 TIME_AR     = "{:.0f}".format( time() )
 HOME_DIR    = os.path.expanduser("~")
@@ -42,15 +43,17 @@ MULTI_IMAGE_FOLDER  = f"{IMAGE_PATH1}/SOHO_Multi_image_Data"
 SINGLE_IMAGE_FOLDER = f"{IMAGE_PATH2}/SOHO_Single_image_Data"
 MULTI_VICON_FOLDER  = f"{VICON_PATH1}/SOHO_Multi_Vicon_Data"
 SINGLE_VICON_FOLDER = f"{VICON_PATH2}/SOHO_Single_Vicon_Data"
-if not os.path.exists(MULTI_IMAGE_FOLDER):  make = os.makedirs(MULTI_IMAGE_FOLDER,exist_ok=True)
-if not os.path.exists(SINGLE_IMAGE_FOLDER): make = os.makedirs(SINGLE_IMAGE_FOLDER,exist_ok=True)
-if not os.path.exists(MULTI_VICON_FOLDER):  make = os.makedirs(MULTI_VICON_FOLDER,exist_ok=True)
-if not os.path.exists(SINGLE_VICON_FOLDER): make = os.makedirs(SINGLE_VICON_FOLDER,exist_ok=True)
+if not os.path.exists(MULTI_IMAGE_FOLDER):  os.makedirs(MULTI_IMAGE_FOLDER,exist_ok=True)
+if not os.path.exists(SINGLE_IMAGE_FOLDER): os.makedirs(SINGLE_IMAGE_FOLDER,exist_ok=True)
+if not os.path.exists(MULTI_VICON_FOLDER):  os.makedirs(MULTI_VICON_FOLDER,exist_ok=True)
+if not os.path.exists(SINGLE_VICON_FOLDER): os.makedirs(SINGLE_VICON_FOLDER,exist_ok=True)
 CSV_FILENAME_MC    = f"{MULTI_VICON_FOLDER}/vicon_mc_{TIME_AR}.csv" 
 CSV_FILENAME_SC    = f"{SINGLE_VICON_FOLDER}/vicon_sc_{TIME_AR}.csv"
 # TODO: Add a fieldname creator that is agnostic to the number of objects
-CSV_FIELDNAMES_MC  = ["Set","ID",OBJECT1_NAME, "x","y","z","w","i", "j", "k",
-                      OBJECT2_NAME, "x","y","z","w","i", "j", "k"]
+CSV_FIELDNAMES_MC  = ["Set","ID",f"x_mm_{OBJECT1_NAME}",f"y_mm_{OBJECT1_NAME}",f"z_mm_{OBJECT1_NAME}",
+                      f"w_{OBJECT1_NAME}",f"i_{OBJECT1_NAME}",f"j_{OBJECT1_NAME}", f"k_{OBJECT1_NAME}",
+                        f"x_mm_{OBJECT2_NAME}",f"y_mm_{OBJECT2_NAME}",f"z_mm_{OBJECT2_NAME}",
+                      f"w_{OBJECT2_NAME}",f"i_{OBJECT2_NAME}",f"j_{OBJECT2_NAME}", f"k_{OBJECT2_NAME}"]
 CSV_FIELDNAMES_SC  = CSV_FIELDNAMES_MC[1:]
 
 class DebugImColl(ThreadedStackBase):
@@ -123,9 +126,7 @@ class DebugImColl(ThreadedStackBase):
                             vicon_data_out = [  
                                 str(set).zfill(5),
                                 f"{str(count_multi+1).zfill(5)}",
-                                OBJECTS[0],
                                 *merged_vicon_data[0],
-                                OBJECTS[1],
                                 *merged_vicon_data[1]
                             ]
                             csv_writer_mc.write_data(vicon_data_out)
@@ -146,9 +147,7 @@ class DebugImColl(ThreadedStackBase):
                             single_image_captured = cv2.imwrite(f"{SINGLE_IMAGE_FOLDER}/_XIMEAsinglecapture_{str(count_single+1).zfill(5)}.jpg", frame)
                             vicon_data_out = [  
                                 f"{str(count_single+1).zfill(5)}",
-                                OBJECTS[0],
                                 *merged_vicon_data[0],
-                                OBJECTS[1],
                                 *merged_vicon_data[1]
                             ]
                             csv_writer_sc.write_data(vicon_data_out)
@@ -172,7 +171,7 @@ class DebugImColl(ThreadedStackBase):
             merged_data = len(OBJECTS)*[None]
             succeeded = True
             for i,object_name in enumerate(OBJECTS):
-                vicon_data      = network[4].recv_pose( object_name=object_name )
+                vicon_data      = deepcopy( network[4].recv_pose( object_name=object_name ) )
                 merged_data[i]  = [ *vicon_data.position, *vicon_data.orientation_quat ]
                 if succeeded and not vicon_data.succeeded: 
                     succeeded = False
