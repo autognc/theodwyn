@@ -33,7 +33,7 @@ TRIGGER_HOLDTIME  = [ 2. ]
 MAX_THROTTLE      = 0.50
 MAX_OMEGA         = 2*pi/5 # rad/s
 SQRT2O2           = sqrt(2)/2
-OBJECT1_NAME      = "eomer"
+OBJECT1_NAME      = "eomer_cam"
 OBJECT2_NAME      = "soho"
 OBJECTS = [OBJECT1_NAME, OBJECT2_NAME]
 MAX_QUEUE_SIZE    = 100
@@ -162,9 +162,11 @@ class DebugImColl(ThreadedStackBase):
     def process( 
         self, 
         network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,ViconConnection]] ]   = None, 
-        camera     : Optional[XIMEA]                                                            = None, 
-        controller : Optional[Any]                                                              = None,
-        logger     : Optional[Logger]                                                           = None
+        camera     : Optional[XIMEA]                                                                            = None, 
+        controller : Optional[Any]                                                                              = None,
+        guidance   : Optional[Any]                                                                              = None, 
+        navigation : Optional[Any]                                                                              = None,
+        logger     : Optional[Logger]                                                                           = None
     ) -> None:
         
         def get_objects_vicondata() -> None:

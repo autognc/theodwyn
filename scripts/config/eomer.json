@@ -34,7 +34,8 @@
         }
     ],
     "camera" : {},
-    "controller" : {
+    "guidance" : {
         "csv_trajfilename" : "./trajs/trajectory_redim_t10.csv"
-    }
+    },
+    "controller" : {}
 }

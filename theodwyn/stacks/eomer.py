@@ -9,7 +9,8 @@ from theodwyn.networks.adafruit                 import Adafruit_PCA9685
 from theodwyn.networks.comm_prot                import ZMQDish
 from theodwyn.networks.sabertooth               import SabertoothSimpleSerial
 from theodwyn.networks.vicon                    import ViconConnection
-from theodwyn.controllers.viconfeedback         import ViconFeedback
+from theodwyn.controllers.viconfeedback         import ViconFeedback, VFB_Setpoints
+from theodwyn.guidances.file_interpreters       import CSVInterpreter
 from theodwyn.manipulators.mechanum_wheel_model import Mechanum4Wheels
 from typing                                     import Optional, List, Union, Any
 from time                                       import time
@@ -93,6 +94,8 @@ class EomerStack(StackBase):
         network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,ViconConnection]] ]   = None, 
         camera     : Optional[Any]                                                                              = None, 
         controller : Optional[ViconFeedback]                                                                    = None,
+        guidance   : Optional[CSVInterpreter]                                                                   = None, 
+        navigation : Optional[Any]                                                                              = None,
         logger     : Optional[Logger]                                                                           = None
     ) -> None:
         """
@@ -174,31 +177,45 @@ class EomerStack(StackBase):
                                 )
         # >>>>>>>>>>>>>>>>>>>>>>>>> Autonomous Control Functionality
 
-        if self.control_mode and controller:
-            # >>> Attempt vicon feedback 
-            if network[4]:
-                vicon_data = network[4].recv_pose( object_name=OBJECT_NAME, ret_quat=False )
-                if vicon_data.succeeded: # >> Allows for vicon feedback
-                    self._update_rotation_matrix( vicon_orientation=vicon_data.orientation_euler )
-                    v_cmd = controller.determine_control( pos_xy_vicon= 1E-3*np.array(vicon_data.position[0:2]).flatten() ) 
+        if self.control_mode and controller and guidance:
+            set_points  = VFB_Setpoints()
+            guide       = guidance.determine_guidance()
+            if not guide is None:
+                if 'x' in guide and 'y' in guide    : set_points.pos_xy  = np.array( [ float(guide['x'])  , float(guide['y']) ] ).flatten()
+                if 'v_x' in guide and 'v_y' in guide: set_points.vel_xy  = np.array( [ float(guide['v_x']), float(guide['v_y']) ] ).flatten()
+                if 'yaw' in guide                   : set_points.ang_yaw = float(guide['yaw'])
 
-                    if not self.logged_startframe: 
-                        self.logged_startframe = True    
-                        if logger: 
-                            ret_msg = f"<sync> -> frame: {vicon_data.framenumber} , time: {controller.get_control_time()}"
-                            logger.write(
-                                ret_msg,
-                                self.process_name
-                            )
+                if network[4]: # >>> Try to pull data from vicon system
+                    vicon_data = network[4].recv_pose( object_name=OBJECT_NAME, ret_quat=False )
+                    if vicon_data.succeeded: 
+                        self._update_rotation_matrix( vicon_orientation=vicon_data.orientation_euler )
+                        v_cmd = controller.determine_control( 
+                            pos_xy_vicon    = 1E-3*np.array(vicon_data.position[0:2]).flatten(), 
+                            ang_yaw_vicon   = vicon_data.orientation_euler[2],
+                            set_points      = set_points 
+                        ) 
 
-                else: # >> Otherwise only allows for feedforward control
-                    v_cmd = controller.determine_control() 
+                        if not self.logged_startframe: 
+                            self.logged_startframe = True    
+                            if logger: 
+                                ret_msg = f"<sync> -> frame: {vicon_data.framenumber} , time: {guidance.get_guidance_time()}"
+                                logger.write(
+                                    ret_msg,
+                                    self.process_name
+                                )
+
+                    else: # >> Otherwise only allows for feedforward control
+                        v_cmd = controller.determine_control(set_points=set_points) 
+
             else: # >> Otherwise only allows for feedforward control
-                v_cmd = controller.determine_control()                 
+                v_cmd = controller.determine_control(set_points=set_points)                 
             
+            # ----------------------------------------------------------------------------------
             # NOTE: The following swap is an artifact of the mixing matrix mechanum_ijacob
             #       being altered for the controller input. This functionality is flawed and 
             #       is a known issue that will be later addressed
+            # ----------------------------------------------------------------------------------
+
             v_cmd[0], v_cmd[1] = v_cmd[1], v_cmd[0]
             
             v_cmd[0:2]      = ( self.rotation_matrix @ v_cmd[0:2] ).flatten()

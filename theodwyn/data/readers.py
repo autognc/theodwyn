@@ -32,6 +32,9 @@ class CSVReader(FileHandler):
         self.csv_reader = None
         super().close_file()
 
+    def reset_iterator( self ):
+        if isinstance( self.file, TextIOWrapper ):
+            self.csv_reader = csv.DictReader( self.file )
 
     def read_nextrow( self ):
         """

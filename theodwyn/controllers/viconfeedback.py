@@ -1,10 +1,16 @@
 import  numpy                                  as np
 from    rohan.common.logging                   import Logger
 from    rohan.common.base_controllers          import ControllerBase
-from    theodwyn.data.readers                  import CSVReader
 from    numpy.typing                           import NDArray
 from    typing                                 import Union, TypeVar, List, Optional
-from    time                                   import perf_counter
+from    dataclasses                            import dataclass
+
+@dataclass
+class VFB_Setpoints:
+    pos_xy  : Optional[NDArray]             = None
+    vel_xy  : Optional[NDArray]             = None
+    ang_yaw : Optional[Union[NDArray,int]]  = None
+
 
 SelfViconFeedback = TypeVar("SelfViconFeedback", bound="ViconFeedback" )
 class ViconFeedback(ControllerBase):
@@ -16,61 +22,48 @@ class ViconFeedback(ControllerBase):
     process_name : str = "ViconFeedback Controller"
     
     p_gain              : NDArray
-    csv_handler         : Optional[CSVReader]  = None # TODO: Fix this 
+    a_gain              : float
     traj_start_time     : Optional[float]      = None
 
     def __init__(
         self,
         p_gain              : NDArray          = np.zeros((2,2)),
-        csv_trajfilename    : Optional[str]    = None,
+        a_gain              : NDArray          = 0.,
         logger              : Optional[Logger] = None, 
         **kwargs,
     ):
         super().__init__(
             logger=logger,
         )
-        if not csv_trajfilename is None: self.csv_handler = CSVReader(filename=csv_trajfilename)
         self.p_gain = p_gain
-        self.load( **kwargs )
+        self.a_gain = a_gain
     
     def init_controller( self ):
-        if not self.csv_handler is None: 
-            self.csv_handler.open_file()
+        pass
 
     def deinit_controller( self ):
-        if not self.csv_handler is None: 
-            self.csv_handler.close_file()
-
-    def get_control_time(self):
-        if not self.traj_start_time is None:
-            return perf_counter() - self.traj_start_time
-        return None
+        pass
 
     def determine_control( 
         self, 
-        pos_xy_vicon : Optional[NDArray] = None 
+        pos_xy_vicon : Optional[NDArray]                = None,
+        ang_yaw_vicon: Optional[float]                  = None,
+        set_points   : Optional[VFB_Setpoints]          = None
     ) -> Union[ List[float], NDArray ]:
     
         v_out = np.zeros((3,))
-        csv_data_t = self.csv_handler.read_nextrow()
-        if csv_data_t is None: 
-            return v_out
+        if set_points is None: return v_out
 
-        if self.traj_start_time is None: self.traj_start_time = perf_counter()
-        if 'time' in csv_data_t: 
-            curr_time = perf_counter() - self.traj_start_time
-            while float(csv_data_t['time']) < curr_time:
-                csv_data_t = self.csv_handler.read_nextrow()
-                if csv_data_t is None: 
-                    return v_out
-            
-            # >>> Feedforward Input
-            # TODO: Add angular velocity support
-            v_out = np.array( [ float(csv_data_t['v_x']), float(csv_data_t['v_y']), 0. ] ).flatten()
+        if not set_points.vel_xy is None:
+            v_out[0]    = set_points.vel_xy[0]
+            v_out[1]    = set_points.vel_xy[1]
 
-            # >>> Feedback Input
-            if not pos_xy_vicon is None:
-                p_err       = np.array( [ float(csv_data_t['x']), float(csv_data_t['y']) ] ).flatten() - pos_xy_vicon.flatten()
-                v_out[0:2] += ( self.p_gain @ p_err ).flatten()
+        if (not ang_yaw_vicon is None) and (not set_points.ang_yaw is None):
+            a_err       = set_points.ang_yaw - ang_yaw_vicon 
+            v_out[2]    = self.a_gain * a_err
+
+        if (not pos_xy_vicon is None) and (not set_points.pos_xy is None):
+            p_err       =  set_points.pos_xy - pos_xy_vicon
+            v_out[0:2] += ( self.p_gain @ p_err ).flatten()
         
         return v_out

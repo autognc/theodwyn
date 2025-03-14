@@ -103,6 +103,8 @@ class CalibrationStack(ThreadedStackBase):
         network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,ViconConnection]] ]   = None, 
         camera     : Optional[Any]                                                                              = None, 
         controller : Optional[Any]                                                                              = None,
+        guidance   : Optional[Any]                                                                              = None, 
+        navigation : Optional[Any]                                                                              = None,
         logger     : Optional[Logger]                                                                           = None
     ) -> None:
         """

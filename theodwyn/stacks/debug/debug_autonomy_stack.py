@@ -59,6 +59,8 @@ class DebugAutoStack(StackBase):
         network    : Optional[ List[Union[ViconConnection,Adafruit_PCA9685,SabertoothSimpleSerial]] ]   = None, 
         camera     : Optional[D455]                                                                     = None, 
         controller : Optional[Any]                                                                      = None,
+        guidance   : Optional[Any]                                                                      = None, 
+        navigation : Optional[Any]                                                                      = None,
         logger     : Optional[Logger]                                                                   = None
     ) -> None:
 
