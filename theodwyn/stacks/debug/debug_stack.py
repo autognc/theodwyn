@@ -1,9 +1,10 @@
 from rohan.common.base_stacks           import StackBase
 from rohan.data.classes                 import StackConfiguration
+from rohan.common.logging               import Logger
 from theodwyn.networks.adafruit         import Adafruit_PCA9685
 from theodwyn.controllers.gamepad       import XboxGamePad 
 from theodwyn.cameras.intel_realsense   import D455
-from typing                             import Optional
+from typing                             import Optional, Any
 from time                               import sleep, time
 
 class DebugStack(StackBase):
@@ -37,7 +38,10 @@ class DebugStack(StackBase):
         self, 
         network    : Optional[Adafruit_PCA9685]   = None, 
         camera     : Optional[D455]               = None, 
-        controller : Optional[XboxGamePad]        = None
+        controller : Optional[XboxGamePad]        = None,
+        guidance   : Optional[Any]                = None, 
+        navigation : Optional[Any]                = None,
+        logger     : Optional[Logger]             = None
     ) -> None:
         
         frame_color, frame_depth = None, None

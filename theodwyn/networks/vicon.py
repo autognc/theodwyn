@@ -1,9 +1,9 @@
-import pyvicon_datastream           as pv
-from pyvicon_datastream.tools       import ObjectTracker
-from rohan.common.base_networks     import NetworkBase
-from rohan.common.logging           import Logger
-from typing                         import Optional, List
-from dataclasses                    import dataclass, field
+import pyvicon_datastream          as pv
+from pyvicon_datastream.tools      import ObjectTracker
+from rohan.common.base_networks    import NetworkBase
+from rohan.common.logging          import Logger
+from typing                        import Optional, List
+from dataclasses                   import dataclass, field
 
 # TODO: Add Additional Output Data Options
 @dataclass
@@ -12,8 +12,8 @@ class ViconData:
     latency             : Optional[int]     = None
     framenumber         : Optional[int]     = None
     position            : Optional[List]    = field(default_factory=list)
+    orientation_quat    : Optional[List]    = field(default_factory=list)
     orientation_euler   : Optional[List]    = field(default_factory=list)
-
 
 class _ViconObjectTracker( ObjectTracker ):
     def __init__( self, ip ):
@@ -92,14 +92,15 @@ class ViconConnection( NetworkBase ):
 
     def recv_pose(
       self,
-      object_name : str
+      object_name : str,
+      ret_quat : bool = True
     ) -> ViconData:
         """
         Query pose of specified object from vicon system
         """
         data = ViconData()
         if self.vicon_ds.is_connected:
-            out = self.vicon_ds.get_position( object_name )
+            out = self.vicon_ds.get_pose( object_name, ret_quat=ret_quat )
             if not ( out == False) and len(out[2])>0:
                 (latency, framenumber, pose_coll)= out
                 pose = pose_coll[0][2:]
@@ -107,5 +108,9 @@ class ViconConnection( NetworkBase ):
                 data.latency                = latency
                 data.framenumber            = framenumber
                 data.position               = list( pose[0:3] )
-                data.orientation_euler      = list( pose[3:6] )
+
+                if ret_quat:
+                    data.orientation_quat   = list( pose[3:7] )
+                else:
+                    data.orientation_euler  = list( pose[3:6] )
         return data

@@ -1,30 +1,70 @@
+import threading
+import cv2
+import os
 import sys
 import numpy                                    as     np
 from math                                       import sqrt, pi
-from rohan.common.base_stacks                   import StackBase
+from rohan.common.base_stacks                   import ThreadedStackBase
+from rohan.common.logging                       import Logger
 from rohan.data.classes                         import StackConfiguration
 from theodwyn.networks.adafruit                 import Adafruit_PCA9685
 from theodwyn.networks.comm_prot                import ZMQDish
 from theodwyn.networks.sabertooth               import SabertoothSimpleSerial
 from theodwyn.cameras.ximea                     import XIMEA
+from theodwyn.networks.vicon                    import ViconConnection
+from theodwyn.data.writers                      import CSVWriter
 from theodwyn.manipulators.mechanum_wheel_model import Mechanum4Wheels
 from typing                                     import Optional, List, Union, Any
 from time                                       import time
+from queue                                      import Queue
+from rohan.utils.timers                         import IntervalTimer
+from copy                                       import deepcopy
+
+TIME_AR     = "{:.0f}".format( time() )
+HOME_DIR    = os.path.expanduser("~")
+SAVE_DIR    = f"run_{TIME_AR}"
+IMAGE_PATH1 = f"{HOME_DIR}/{SAVE_DIR}/MC"
+IMAGE_PATH2 = f"{HOME_DIR}/{SAVE_DIR}/SC"
+VICON_PATH1 = f"{HOME_DIR}/{SAVE_DIR}/MC"
+VICON_PATH2 = f"{HOME_DIR}/{SAVE_DIR}/SC"
 
 SWITCH_COOLDOWNS  = [ 1. ]
 TRIGGER_HOLDTIME  = [ 2. ]
 MAX_THROTTLE      = 0.50
 MAX_OMEGA         = 2*pi/5 # rad/s
 SQRT2O2           = sqrt(2)/2
-class DebugImColl(StackBase):
+OBJECT1_NAME      = "eomer_cam"
+OBJECT2_NAME      = "soho"
+OBJECTS = [OBJECT1_NAME, OBJECT2_NAME]
+MAX_QUEUE_SIZE    = 100
+
+# DATA Collection constants
+MULTI_IMAGE_FOLDER  = f"{IMAGE_PATH1}/SOHO_Multi_image_Data"
+SINGLE_IMAGE_FOLDER = f"{IMAGE_PATH2}/SOHO_Single_image_Data"
+MULTI_VICON_FOLDER  = f"{VICON_PATH1}/SOHO_Multi_Vicon_Data"
+SINGLE_VICON_FOLDER = f"{VICON_PATH2}/SOHO_Single_Vicon_Data"
+if not os.path.exists(MULTI_IMAGE_FOLDER):  os.makedirs(MULTI_IMAGE_FOLDER,exist_ok=True)
+if not os.path.exists(SINGLE_IMAGE_FOLDER): os.makedirs(SINGLE_IMAGE_FOLDER,exist_ok=True)
+if not os.path.exists(MULTI_VICON_FOLDER):  os.makedirs(MULTI_VICON_FOLDER,exist_ok=True)
+if not os.path.exists(SINGLE_VICON_FOLDER): os.makedirs(SINGLE_VICON_FOLDER,exist_ok=True)
+CSV_FILENAME_MC    = f"{MULTI_VICON_FOLDER}/vicon_mc_{TIME_AR}.csv" 
+CSV_FILENAME_SC    = f"{SINGLE_VICON_FOLDER}/vicon_sc_{TIME_AR}.csv"
+# TODO: Add a fieldname creator that is agnostic to the number of objects
+CSV_FIELDNAMES_MC  = ["Set","ID",f"x_mm_{OBJECT1_NAME}",f"y_mm_{OBJECT1_NAME}",f"z_mm_{OBJECT1_NAME}",
+                      f"w_{OBJECT1_NAME}",f"i_{OBJECT1_NAME}",f"j_{OBJECT1_NAME}", f"k_{OBJECT1_NAME}",
+                        f"x_mm_{OBJECT2_NAME}",f"y_mm_{OBJECT2_NAME}",f"z_mm_{OBJECT2_NAME}",
+                      f"w_{OBJECT2_NAME}",f"i_{OBJECT2_NAME}",f"j_{OBJECT2_NAME}", f"k_{OBJECT2_NAME}"]
+CSV_FIELDNAMES_SC  = CSV_FIELDNAMES_MC[1:]
+
+class DebugImColl(ThreadedStackBase):
     """
-    Stack used for example, testing and verification of communications
+    Stack used for example, testing and verification of image collection
     :param config: The stack configuration whose format can be found at .data.classes
     :param spin_intrvl: Inverse-frequency of spinning loop
     :param cntrl_factor: Factor relating controller input to servo angle changes
     :param verbose: Verbosity flag indicating whether debugging task should be printed to console
     """
-    process_name    : str = "Debug Communications Stack"
+    process_name    : str = "Debug Image Collection Stack"
 
     verbose         : bool
     cntl_factor     : float
@@ -42,11 +82,10 @@ class DebugImColl(StackBase):
     ):
         super().__init__(
             config=config,
-            spin_intrvl=spin_intrvl
+            spin_intrvl=spin_intrvl,
         )
         self.cntl_factor    = cntrl_factor
-        self.verbose        = verbose
-
+        self.verbose        = verbose     
         self.switches       = 1*[int(False)]
         self.last_switches  = 1*[time()]
         self.held_buttons   = 1*[time()]
@@ -55,20 +94,103 @@ class DebugImColl(StackBase):
         model               = Mechanum4Wheels(lx=0.165,ly=0.11,wheel_radius=0.075)
         self.mechanum_ijacob= model.get_invjacobian() * model.wheel_radius
 
+        self.process_switch   = IntervalTimer( interval=SWITCH_COOLDOWNS[0] )
+        self.capture_flag     = threading.Event()
+        self.capture_switch   = threading.Event()
+        self.processing_queue = Queue(maxsize=MAX_QUEUE_SIZE)
+        self.add_threaded_method( target=self.data_saving )
+
+
+    def data_saving(self):
+        with    CSVWriter(filename=CSV_FILENAME_MC,fieldnames=CSV_FIELDNAMES_MC) as csv_writer_mc, \
+                CSVWriter(filename=CSV_FILENAME_SC,fieldnames=CSV_FIELDNAMES_SC) as csv_writer_sc:
+            
+            count_single, count_multi, set = 0, 0, 0
+            capture_flag_switched_on  = False
+            while not self.sigterm.is_set():
+                while not self.processing_queue.empty():
+                    frame, merged_vicon_data = self.processing_queue.get()
+
+                    if not capture_flag_switched_on and self.capture_flag.is_set():
+                        capture_flag_switched_on = True
+                        set+=1
+                        count_multi = 0
+                    elif capture_flag_switched_on and not self.capture_flag.is_set():
+                        capture_flag_switched_on = False
+
+                    if self.capture_flag.is_set():
+
+                        if not self.capture_switch.is_set():
+                            # SAVE IMAGE AND CSV
+                            multi_image_captured = cv2.imwrite(f"{MULTI_IMAGE_FOLDER}/Set_{str(set).zfill(5)}_XIMEAmulticapture_{str(count_multi+1).zfill(5)}.jpg", frame)
+                            vicon_data_out = [  
+                                str(set).zfill(5),
+                                f"{str(count_multi+1).zfill(5)}",
+                                *merged_vicon_data[0],
+                                *merged_vicon_data[1]
+                            ]
+                            csv_writer_mc.write_data(vicon_data_out)
+
+                            # Log Confirmation
+                            if multi_image_captured:  
+                                ret_msg = f"Image ({set},{count_multi}) captured"
+                            else:
+                                ret_msg = f"Image set not captured"
+                            self.logger.write( ret_msg, process_name=self.process_name)
+
+                            count_multi +=1
+                            
+                        else:
+                            self.capture_switch.clear() 
+                            self.capture_flag.clear()
+
+                            single_image_captured = cv2.imwrite(f"{SINGLE_IMAGE_FOLDER}/_XIMEAsinglecapture_{str(count_single+1).zfill(5)}.jpg", frame)
+                            vicon_data_out = [  
+                                f"{str(count_single+1).zfill(5)}",
+                                *merged_vicon_data[0],
+                                *merged_vicon_data[1]
+                            ]
+                            csv_writer_sc.write_data(vicon_data_out)
+
+                            if single_image_captured:  
+                                ret_msg = f"Image {count_single +1} captured"
+                            else:
+                                ret_msg = f"Image set not captured"
+                            self.logger.write( ret_msg, process_name=self.process_name)
+                            count_single +=1
+
     def process( 
         self, 
-        network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial]] ]   = None, 
-        camera     : Optional[XIMEA]                                                            = None, 
-        controller : Optional[Any]                                                              = None
+        network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,ViconConnection]] ]   = None, 
+        camera     : Optional[XIMEA]                                                                            = None, 
+        controller : Optional[Any]                                                                              = None,
+        guidance   : Optional[Any]                                                                              = None, 
+        navigation : Optional[Any]                                                                              = None,
+        logger     : Optional[Logger]                                                                           = None
     ) -> None:
+        
+        def get_objects_vicondata() -> None:
+            merged_data = len(OBJECTS)*[None]
+            succeeded = True
+            for i,object_name in enumerate(OBJECTS):
+                vicon_data      = deepcopy( network[4].recv_pose( object_name=object_name ) )
+                merged_data[i]  = [ *vicon_data.position, *vicon_data.orientation_quat ]
+                if succeeded and not vicon_data.succeeded: 
+                    succeeded = False
+                    break
+            return merged_data, succeeded
 
-        frame_color = None
-        if isinstance( camera, XIMEA ):
-            frame_color = camera.get_frame()
-            
-        if len(network)>0 and isinstance( network[0], ZMQDish ):
-            topic, control_input = network[0].recv()
 
+        if self.capture_flag.is_set() and camera: # and isinstance( camera, XIMEA ):
+            frame = camera.get_frame()
+
+            if len(network)>4 and network[4]: # isinstance( network[4], ViconConnection ):
+                merged_vicon_data, succeeded = get_objects_vicondata()
+                if succeeded: 
+                    self.processing_queue.put( (frame, merged_vicon_data) )                    
+
+        if len(network)>0 and network[0]: # isinstance( network[0], ZMQDish ):
+            _, control_input = network[0].recv()
 
             if control_input is None:
                 # NOTE: Need to stop the motors if network connection is lost
@@ -85,11 +207,21 @@ class DebugImColl(StackBase):
                         self.holding_buttons[0] = True
                         self.held_buttons[0]    = time()
                     if time() - self.held_buttons[0] > TRIGGER_HOLDTIME[0]: 
-                        raise KeyboardInterrupt
+                        self.sigterm.set()
                 else:
                     if self.holding_buttons[0] is True:  self.holding_buttons[0] = False
 
-                if len(network)>1 and isinstance( network[1], Adafruit_PCA9685 ):
+                # Multi-Image Capture
+                if control_input[5] > 0.5 and self.process_switch.check_interval():
+                    self.capture_flag.clear() if self.capture_flag.is_set() else self.capture_flag.set()
+
+                # Single Image Capture
+                if control_input[2] > 0.5 and self.process_switch.check_interval():
+                    self.capture_flag.set()
+                    self.capture_switch.set()
+                
+                # Controller
+                if len(network)>1 and network[1]: # isinstance( network[1], Adafruit_PCA9685 ):
                     r_analog  = control_input[3:5]
                     pan_command, tilt_command = network[1].servokit.servo[0].angle , network[1].servokit.servo[1].angle
                     if abs(r_analog[0]) > 0.2: pan_command += self.cntl_factor * -r_analog[0]
@@ -97,7 +229,7 @@ class DebugImColl(StackBase):
                     command = [ pan_command, tilt_command ]
                     network[1].send( cmd = command )
 
-                if len(network)>3 and isinstance( network[2], SabertoothSimpleSerial ) and isinstance( network[3], SabertoothSimpleSerial ):
+                if len(network)>3 and network[2] and network[3]: # isinstance( network[2], SabertoothSimpleSerial ) and isinstance( network[3], SabertoothSimpleSerial ):
                     l_analog     = control_input[0:2]
                     bumper_diff  = control_input[10] - control_input[11]
                     v = np.zeros((3,1)).flatten()

@@ -3,8 +3,8 @@
        {
             "addr"  : "udp://192.168.1.48:5555",
             "data_format" : "17f",
-            "topic" : "XboxWirelessController",
-            "timeo" : 500
+            "topic" : "xwc",
+            "timeo" : 100
         },
         {
             "channels" : 16,
@@ -28,8 +28,30 @@
                 "stopbits" : 1
             },
             "min_interval"  : 0.00005
+        },
+        {
+            "host_addr" : "192.168.1.100"
         }
     ],
-    "camera" : {},
+    "camera" : {
+        "resolution" : [1280,1024],
+        "stream_resolution" : [320,256],
+        "fps" : 30,
+        "aeg_settings" : {
+            "ag_max_limit"  : 10,
+            "ae_max_limit"  : 100000,
+            "exposure"      : 100000,
+            "gain"          : 0
+        },
+        "awb_settings" : {
+            "wb_coef_red"   : 1.0,
+            "wb_coef_green" : 1.0,
+            "wb_coef_blue"  : 1.0
+        },
+        "gstream_config" : {
+            "sink_port" : "4444",
+            "sink_ip"   : "224.0.0.1"
+        }
+    },
     "controller" : {}
 }

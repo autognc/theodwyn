@@ -79,7 +79,7 @@ class XIMEA(ThreadedCameraBase):
                 'x264enc tune=zerolatency bitrate=500 speed-preset=superfast ! '
                 'h264parse ! '
                 'rtph264pay ! '
-                'udpsink port={} host={}'
+                'udpsink port={} host={} auto-multicast=true'
 
             ).format(
                 self.stream_resolution[0],
@@ -107,6 +107,7 @@ class XIMEA(ThreadedCameraBase):
         self.capture_obj.set_framerate( self.fps            )
         self.capture_obj.set_width(     self.resolution[0]  )
         self.capture_obj.set_height(    self.resolution[1]  )
+        self.capture_obj.set_imgdataformat('XI_RGB24')
 
         if self.aeg_settings is not None:
             if 'ae_max_limit' in self.aeg_settings and 'ag_max_limit' in self.aeg_settings:

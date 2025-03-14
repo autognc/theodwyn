@@ -4,7 +4,7 @@
             "addr"  : "udp://192.168.1.48:5555",
             "data_format" : "17f",
             "topic" : "xwc",
-            "timeo" : 500
+            "timeo" : 100
         },
         {
             "channels" : 16,
@@ -28,6 +28,9 @@
                 "stopbits" : 1
             },
             "min_interval"  : 0.00005
+        },
+        {
+            "host_addr" : "192.168.1.100"
         }
     ],
     "camera" : {},
