@@ -1,4 +1,3 @@
-import os
 import numpy                                    as     np
 from numpy.typing                               import NDArray
 from math                                       import sqrt, pi, cos, sin
@@ -189,7 +188,7 @@ class EomerStack(StackBase):
                     vicon_data = network[4].recv_pose( object_name=OBJECT_NAME, ret_quat=False )
                     if vicon_data.succeeded: 
                         self._update_rotation_matrix( vicon_orientation=vicon_data.orientation_euler )
-                        v_cmd = controller.determine_control( 
+                        v_cmd, _ = controller.determine_control( 
                             pos_xy_vicon    = 1E-3*np.array(vicon_data.position[0:2]).flatten(), 
                             ang_yaw_vicon   = vicon_data.orientation_euler[2],
                             set_points      = set_points 
@@ -205,10 +204,10 @@ class EomerStack(StackBase):
                                 )
 
                     else: # >> Otherwise only allows for feedforward control
-                        v_cmd = controller.determine_control(set_points=set_points) 
+                        v_cmd, _ = controller.determine_control(set_points=set_points) 
 
             else: # >> Otherwise only allows for feedforward control
-                v_cmd = controller.determine_control(set_points=set_points)                 
+                v_cmd, _ = controller.determine_control(set_points=set_points)                 
             
             # ----------------------------------------------------------------------------------
             # NOTE: The following swap is an artifact of the mixing matrix mechanum_ijacob
