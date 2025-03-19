@@ -15,14 +15,14 @@ from theodwyn.networks.vicon                    import ViconConnection
 from theodwyn.data.writers                      import CSVWriter
 from theodwyn.manipulators.mechanum_wheel_model import Mechanum4Wheels
 from typing                                     import Optional, List, Union, Any
-from time                                       import time
+from time                                       import time, strftime
 from queue                                      import Queue
 from rohan.utils.timers                         import IntervalTimer
 from copy                                       import deepcopy
 
-TIME_AR     = time.strftime("%Y-%m-%d_%H-%M-%S")
+TIME_AR     = strftime("%Y-%m-%d_%H-%M-%S")
 HOME_DIR    = os.path.expanduser("~")
-SAVE_DIR    = f"run_{TIME_AR}"
+SAVE_DIR    = f"eomer_usb/run_{TIME_AR}"
 IMAGE_PATH1 = f"{HOME_DIR}/{SAVE_DIR}/MC"
 IMAGE_PATH2 = f"{HOME_DIR}/{SAVE_DIR}/SC"
 VICON_PATH1 = f"{HOME_DIR}/{SAVE_DIR}/MC"
@@ -49,10 +49,24 @@ if not os.path.exists(MULTI_VICON_FOLDER):  os.makedirs(MULTI_VICON_FOLDER,exist
 if not os.path.exists(SINGLE_VICON_FOLDER): os.makedirs(SINGLE_VICON_FOLDER,exist_ok=True)
 CSV_FILENAME_MC    = f"{MULTI_VICON_FOLDER}/vicon_mc_{TIME_AR}.csv" 
 CSV_FILENAME_SC    = f"{SINGLE_VICON_FOLDER}/vicon_sc_{TIME_AR}.csv"
-CSV_FIELDNAMES_MC  = ["Set","ID",f"x_mm_{VICON_OBJ1}",f"y_mm_{VICON_OBJ1}",f"z_mm_{VICON_OBJ1}",
-                      f"w_{VICON_OBJ1}",f"i_{VICON_OBJ1}",f"j_{VICON_OBJ1}", f"k_{VICON_OBJ1}",
-                        f"x_mm_{VICON_OBJ2}",f"y_mm_{VICON_OBJ2}",f"z_mm_{VICON_OBJ2}",
-                      f"w_{VICON_OBJ2}",f"i_{VICON_OBJ2}",f"j_{VICON_OBJ2}", f"k_{VICON_OBJ2}"]
+CSV_FIELDNAMES_MC  = [
+    "Set",
+    "ID",
+    f"x_mm_{VICON_OBJ1}",
+    f"y_mm_{VICON_OBJ1}",
+    f"z_mm_{VICON_OBJ1}",
+    f"w_{VICON_OBJ1}",
+    f"i_{VICON_OBJ1}",
+    f"j_{VICON_OBJ1}", 
+    f"k_{VICON_OBJ1}",
+    f"x_mm_{VICON_OBJ2}",
+    f"y_mm_{VICON_OBJ2}",
+    f"z_mm_{VICON_OBJ2}",
+    f"w_{VICON_OBJ2}",
+    f"i_{VICON_OBJ2}",
+    f"j_{VICON_OBJ2}", 
+    f"k_{VICON_OBJ2}"
+]
 CSV_FIELDNAMES_SC  = CSV_FIELDNAMES_MC[1:]
 
 
