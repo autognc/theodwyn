@@ -210,7 +210,7 @@ class XIMEA(ThreadedCameraBase):
                 self.stream_obj.write( image=cv.resize( frame_data, self.stream_resolution) )
 
 
-    def get_frame( self ) -> Tuple[ cv.typing.MatLike, cv.typing.MatLike ]:
+    def get_frame( self ) -> NDArray:
         """
         Retrieves return code and frame information
         """
