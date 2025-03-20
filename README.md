@@ -1,5 +1,5 @@
 # theodwyn
-This repository provides the software stack for the Eomer and Eowyn Unmanned Ground Vehicles (UGVs) at the Conrtols for Distributed and Uncertain Systems Lab (CDUS). The Eomer stack, unlike Eowyn, is equipped with a vision-sensor and performs relative navigation with respect to a given target -- usually, Eowyn. The UGVs are pictured below for reference:
+This repository provides the software stack for the Eomer and Eowyn Unmanned Ground Vehicles (UGVs) at the Controls for Distributed and Uncertain Systems Lab (CDUS). The Eomer stack, unlike Eowyn, is equipped with a vision-sensor and performs relative navigation with respect to a given target -- usually, Eowyn. The UGVs are pictured below for reference:
 
 - [ ] TODO: Image of Eomer
 - [ ] TODO: Image of Eowyn
