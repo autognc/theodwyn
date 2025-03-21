@@ -12,13 +12,13 @@ from scipy.linalg import expm
 import pdb 
 
 # Local Imports
-from pose_utils import setup_JAX
+from theodwyn.navigations.pose_utils import setup_JAX
 jax, jnp    = setup_JAX.setup_safely()
-from pose_utils import custom_Quaternion
-from pose_utils import QuatMath # using sscp_R3()
-from measurement import jax_solve_pose_exmap_reint_parallel
-from measurement import jax_solve_pose_local_reint_parallel
-from measurement import Pose_Direct_LM, Pose_Local_LM
+from theodwyn.navigations.pose_utils import custom_Quaternion
+from theodwyn.navigations.pose_utils import QuatMath # using sscp_R3()
+from theodwyn.navigations.measurement import jax_solve_pose_exmap_reint_parallel
+from theodwyn.navigations.measurement import jax_solve_pose_local_reint_parallel
+from theodwyn.navigations.measurement import Pose_Direct_LM, Pose_Local_LM
 
 
 class MEKF_ppt_Dynamics:
@@ -245,7 +245,7 @@ class MEKF_ppt_Dynamics:
     @staticmethod
     def nls_cpp(pose0, az_el, kps_3D, bearing_meas_std_rad, rCamVec, num_inits = 10):
         """ Measurement model function to solve nonlinear least squares problem for pose using C++ ceres solver """
-        import ceres_pose_python
+        import theodwyn.navigations.ceres_pose_python as ceres_pose_python
         num_kps = kps_3D.shape[0]
         yVec    = az_el.reshape(2*num_kps, 1)
         pos0    = pose0[:3].reshape(3, 1)

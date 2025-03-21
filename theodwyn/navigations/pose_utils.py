@@ -1630,6 +1630,7 @@ class InferUtils:
         sess        = onnxruntime.InferenceSession(model_path, providers = ort_device)
         in_names    = sess.get_inputs()[0].name
         out_names   = [out.name for out in sess.get_outputs()]
+        return sess, in_names, out_names 
 
     @staticmethod
     def ort_krcnn_inference(sess, in_names, out_names, img_input, output_keys = ['boxes', 'labels', 'scores', 'keypoints', 'keypoints_scores']):
@@ -1839,7 +1840,7 @@ class InferUtils:
     
     @staticmethod
     def cv2_preprocess_img_np( 
-                            img_bgr
+                            img_fp_or_arr
                             ,resize_tuple = (512, 512)
                             ,imagenet_norm = False
                             ,pad_color = (0, 0, 0)
@@ -1871,6 +1872,10 @@ class InferUtils:
 
         # read in RBG image and return BGR image array
         # flags = cv2.IMREAD_COLOR, is the default flag that will return a BGR image array
+        if isinstance(img_fp_or_arr, np.ndarray):
+            img_bgr = img_fp_or_arr
+        else:
+            img_bgr     = cv2.imread(img_fp_or_arr, flags = cv2.IMREAD_COLOR) # returns uint8 numpy array that is Height X Width X Channel with values from 0 to 255
         img_bgr     = InferUtils.cv2_pad_to_square(img_bgr, pad_color = pad_color) # pad to square first before resizing, default pad_color input is black (0,0,0)
         img_bgr     = cv2.resize(src = img_bgr, dsize = (resize_tuple[1], resize_tuple[0])) # dsize is (width, height), image is still Height X Width X Channel
         img_rgb     = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB) # convert to RGB for albumentations, expands back to three channels

@@ -5,10 +5,10 @@ from scipy.optimize import least_squares, minimize
 import pdb
 
 # Local Imports
-from pose_utils import setup_JAX
+from theodwyn.navigations.pose_utils import setup_JAX
 jax, jnp    = setup_JAX.setup_safely()
-from pose_utils import QuatMath
-from pose_utils import TorchQuatMath
+from theodwyn.navigations.pose_utils import QuatMath
+from theodwyn.navigations.pose_utils import TorchQuatMath
 
 # Note: calls to fcns that contain .jax here will ultimately fail b/c jax is a dummy module when it is not installed
 
