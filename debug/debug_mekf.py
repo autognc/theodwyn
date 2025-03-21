@@ -23,7 +23,7 @@ if __name__ == "__main__":
 
     with DebugMEKF( config = config ) as theo_stack:
         try:
-            while True:
+            while not theo_stack.sigterm.is_set():
                 sleep(10)
         except KeyboardInterrupt:
             theo_stack.sigterm.set()

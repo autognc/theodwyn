@@ -7,7 +7,8 @@ from copy                               import deepcopy
 from typing                             import TypeVar, Optional, Tuple, Dict, List
 from numpy.typing                       import NDArray
 from time                               import time, sleep, strftime
-# from queue                              import Queue
+from time                               import perf_counter
+
 
 # Manually Installed Package Imports
 from rohan.common.base_navigations      import ThreadedNavigationBase
@@ -380,8 +381,11 @@ class MEKF(ThreadedNavigationBase):
             
             #####################################TODO: check this
             # reach this code after self.first_meas_proc.is_set() is True
+            # considerations --> sync the timeupdate when a measurement is ready?
             self.mekf_prop_timer.await_interval()
+            time_update_start   = perf_counter()
             self.mekf.time_update()
+            time_update_end     = perf_counter()
 
             # if measurement is ready and first measurement is processed, then measurement update
             if self.meas_ready.is_set():
@@ -389,9 +393,15 @@ class MEKF(ThreadedNavigationBase):
                 pose_est        = np.concatenate([self.mekf.position_est, self.mekf.global_quat_est])
                 poseJ, covarJ   = self.meas_fcn(pose_est, self.meas_az_el, self.kps3D, self.bearing_std, self.cam_offset)
                 posiJ, quatJ    = poseJ[:3], poseJ[3:]
+                meas_update_started = perf_counter()
                 self.mekf.measurement_update(quatJ, posiJ, covarJ)
+                meas_update_ended   = perf_counter()
                 self.mekf.mekf_reset()
-                self.logger.write(f"Filter Measurement Update Performed, corresponding pose {poseJ}", process_name = self.process_name)
+                self.logger.write(
+                                    f"Filter Measurement Update Performed, corresponding pose {poseJ}, "
+                                    f"Most Recent Time Update Start & End: {time_update_start}, {time_update_end},"
+                                    f"Most Recent Measurement Update Start & End: {meas_update_started}, {meas_update_ended}", 
+                                    process_name = self.process_name)
                 self.meas_csvw.write_data( build_meas_dict(time(), posiJ, quatJ, covarJ) )
                 if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
                     self.meas_csvw.file.flush()

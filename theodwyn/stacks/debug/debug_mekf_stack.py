@@ -69,13 +69,12 @@ class DebugMEKF(ThreadedStackBase):
         elif self.source_mode == "offline":
             if self.image_index >= len(self.image_files):
                 self.sigterm.set()
-                # self.stop_spin()
-                return None
+                return None, None
             image_path          = self.image_files[self.image_index]
             self.image_index    += 1
             image               = cv2.imread(image_path)
             return image, image_path
-        return None
+        return None, None
 
     def process_stack(self) -> None:
         """
