@@ -105,6 +105,7 @@ class CollectionStack(ThreadedStackBase):
     rotation_matrix : NDArray = np.identity(2)
     guidance_ready  : bool    = False
     processing_queue: Queue
+    count           : int     = 0
 
     def __init__( 
         self, 
@@ -149,27 +150,26 @@ class CollectionStack(ThreadedStackBase):
 
     def data_saving(self):
         with CSVWriter(filename=CSV_FILENAME,fieldnames=CSV_FIELDNAMES) as csv_writer:
-            count  = 0
             while not self.sigterm.is_set():
                 while not self.processing_queue.empty():
                     frame, merged_vicon_data = self.processing_queue.get()
                     ret_code = imwrite(
-                        f"{IMAGE_FOLDER}/img_{str(count+1).zfill(5)}.jpg", 
+                        f"{IMAGE_FOLDER}/img_{str(self.count+1).zfill(5)}.jpg", 
                         frame
                     )
 
                     if ret_code:
                         vicon_data_out = [  
-                            f"{str(count+1).zfill(5)}",
+                            f"{str(self.count+1).zfill(5)}",
                             *merged_vicon_data[0],
                             *merged_vicon_data[1]
                         ]
                         csv_writer.write_data(vicon_data_out)
-                        if count % 50 == 0:
-                            ret_msg = f"{count+1} images captured"
+                        if self.count % 50 == 0:
+                            ret_msg = f"{self.count+1} images captured"
                             if self.logger:
                                 self.logger.write( ret_msg, process_name=self.process_name)
-                        count +=1
+                        self.count +=1
                 sleep(1)
 
     def process( 
@@ -197,6 +197,7 @@ class CollectionStack(ThreadedStackBase):
         camera_command, wheel_throttles = None, [ 0. , 0. , 0. , 0. ]
         if camera: 
             frame   = camera.get_frame()
+            navigation.pass_in_frame( image = frame, img_cnt = self.count )
             # pass frame and img_fp/img_fn for MEKF
 
         # >>>>>>>>>>>>>>>>>>>>>>>>> Manual Control Functionality
@@ -271,7 +272,8 @@ class CollectionStack(ThreadedStackBase):
         if self.control_mode and controller and guidance:
             set_points  = VFB_Setpoints()
             if not self.guidance_ready: guide = guidance.get_init_guidance()
-            else:                       
+            elif True: guide = {}
+            elif False:                       
                 guide = guidance.determine_guidance()
                 if network[4]: # >>> Try to pull camera and target data from vicon system
                     cam_vicon_data  = network[4].recv_pose( object_name=CAMERA_NAME, ret_quat=False )

@@ -3,7 +3,7 @@ import shutil
 import threading
 import numpy                            as np
 import cv2                              as cv
-from copy                               import deepcopy
+from copy                               import deepcopy, copy
 from typing                             import TypeVar, Optional, Tuple, Dict, List
 from numpy.typing                       import NDArray
 from time                               import time, sleep, strftime
@@ -149,7 +149,7 @@ class MEKF(ThreadedNavigationBase):
     # for logging
     process_name            : str                   = 'MEKF + Inference Meas Model (Threaded)'
     frame_in                : Optional[NDArray]     = None
-    frame_in_fp             : Optional[str]         = None
+    frame_id                : int
     mekf_prop_timer         : IntervalTimer
     mekf_meas_timer         : IntervalTimer
 
@@ -311,20 +311,26 @@ class MEKF(ThreadedNavigationBase):
             # 5) If first measurement is set, process first measurement
             # 6) update az_el value in self 
             if not self.frame_in is None:
-                import cv2
-                cv2.imwrite('/home/saa4743/agnc_repos/test320.jpg', self.frame_in)
+                
+                with self._instance_lock:
+                    frame_proc = self.frame_in.copy()
+                    frame_id   = copy(self.frame_id)
+
+                # cv.imwrite('/home/saa4743/agnc_repos/test320.jpg', self.frame_in)
                 img_np_flt      = iut.cv2_preprocess_img_np(
-                                                                self.frame_in
+                                                                frame_proc
                                                                 , resize_tuple  = self.img_in_size
                                                                 , imagenet_norm = self.imgnet_norm
                                                                 , pad_color     = self.pad_color
                                                             ).astype(np.float32)
-                # cv2.imwrite('/home/saa4743/agnc_repos/test320_2.jpg', img_np_flt)
+                # cv.imwrite('/home/saa4743/agnc_repos/test320_2.jpg', img_np_flt)
                 
                 img_h, img_w    = img_np_flt.shape[1], img_np_flt.shape[2]
+                infer_start     = perf_counter()
                 ort_output_dict = iut.ort_krcnn_inference(self.model, self.minput_names, self.moutput_names, img_np_flt, output_keys = self.outkeys) # infer on frame
-                # if self.logger:
-                #     self.logger.write(f"Frame Inference Completed on {self.frame_in_fp}", process_name = self.process_name)
+                infer_end       = perf_counter()
+                if self.logger:
+                    self.logger.write(f"Frame Inference Completed in {infer_end - infer_start} seconds on {frame_id}", process_name = self.process_name)
                 try: 
                     
                     ort_sco_max_idx = np.argmax(ort_output_dict[self.score_key])
@@ -335,11 +341,11 @@ class MEKF(ThreadedNavigationBase):
                     az_el,_         = Bearing.compute_azimuth_elevation(ort_kps_2D, self.Kmat)
                     self.meas_az_el = az_el
                     if self.logger:
-                        self.logger.write(f"Frame Inference Accepted on {self.frame_in_fp}", process_name = self.process_name)
+                        self.logger.write(f"Frame Inference Accepted on {frame_id}", process_name = self.process_name)
                         # self.logger.write(f"Box: {ort_box_m}, Score: {ort_sco_m}, AzEl: {az_el}", process_name = self.process_name)
                     self.inf_csvw.write_data({
                                                 'timestamp' : perf_counter()
-                                                , 'img_fp'  : self.frame_in_fp
+                                                , 'img_fp'  : "image_" + str(frame_id)
                                                 , 'img_h_pix': img_h
                                                 , 'img_w_pix': img_w
                                                 , 'box'     : ort_box_m.tolist()
@@ -357,7 +363,7 @@ class MEKF(ThreadedNavigationBase):
 
                 except Exception as e:
                     self.skipped += 1
-                    fail_str    = f"Inference Failed with Exception: {e} for Image ID {self.frame_in_fp}: total skipped count: {self.skipped}"
+                    fail_str    = f"Inference Failed with Exception: {e} for Image ID {frame_id}: total skipped count: {self.skipped}"
                     if self.logger:
                         self.logger.write(fail_str, process_name = self.process_name)
             
@@ -381,7 +387,7 @@ class MEKF(ThreadedNavigationBase):
                     self.first_meas_proc.set()
                     self.is_first_meas.clear()
                     if self.logger:
-                        self.logger.write(f"Filter Initialized and Ready to Run Based on First image: {self.frame_in_fp}", process_name = self.process_name)
+                        self.logger.write(f"Filter Initialized and Ready to Run Based on First image", process_name = self.process_name)
                     self.est_csvw.write_data( build_est_dict(perf_counter(), -1, self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
                     if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
                         # flush the file to ensure that the data is written to disk
@@ -434,13 +440,13 @@ class MEKF(ThreadedNavigationBase):
     def pass_in_frame( 
         self,
         image : NDArray,
-        img_path : Optional[str] = None
+        img_cnt : int
     ) -> None:
         """
         Retrieves return code and frame information
         """
         self.frame_in       = image
-        self.frame_in_fp    = img_path
+        self.frame_id       = img_cnt
         # if self.logger:
         #     self.logger.write(f"Frame Acquired: {img_path}", process_name=self.process_name)
             
