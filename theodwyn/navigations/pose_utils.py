@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from numpy.linalg import norm
 from scipy.spatial.transform import Rotation as R
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, Dict, Any 
+import itertools
 import logging  
 import pdb 
 
@@ -1886,3 +1888,195 @@ class InferUtils:
             return img_rgb_chw, img_bgr
         else:
             return img_rgb_chw
+        
+
+class Plotting:
+    """ Class containing methods for plotting truth, predictions, and errors """
+
+    @staticmethod
+    def subplot_singlecol_truth_est(
+                                        time : np.ndarray
+                                        , gt : np.ndarray
+                                        , est : np.ndarray
+                                        , output_path : str
+                                        , plot_num : int
+                                        , plt_dict : Optional[Dict[str, Any]] = None # means that the type is either Dict[str, Any] or None
+                                ):
+
+        """
+        This function plots the ground truth and estimated values for a given set of data within a single subplot
+
+        Inputs:
+        time (np.array): the time values, N x 1 array
+        gt (np.array): the ground truth values, N x M array
+        est (np.array): the estimated values, N x M array
+        outputh_path (str): the path to save the plot
+        plot_num (int): the plot number
+        plt_dict (dict): the dictionary containing the plot details
+        """
+
+        # check if the number of components in the ground truth and estimated values are the same
+        num_est_components  = est.shape[1]
+        num_gt_components   = gt.shape[1]
+        num_comps           = num_est_components
+        if num_est_components != num_gt_components:
+            raise ValueError('The number of estimated and ground truth components must be the same')
+
+        est_timesteps       = est.shape[0]
+        gt_timesteps        = gt.shape[0]
+        provided_timesteps  = time.shape[0]
+        if est_timesteps != gt_timesteps or est_timesteps != provided_timesteps or gt_timesteps != provided_timesteps:
+            raise ValueError('The number of timesteps in the ground truth and estimated values must be the same')
+
+        # check if the dictionary is provided 
+        if plt_dict is None:
+            plt_dict    = {
+                            'labels' : ['X', 'Y', 'Z']
+                            , 'title' : 'Ground Truth vs. Estimated Translation'
+                            , 'legend' : ['Truth', 'Estimate']
+                            , 'fig_size' : (10, 8)
+                            , 'filename' : 'truth_vs_estimate.png'
+                            , 'x_label' : 'Time (seconds)' 
+                            , 'y_label' : 'Translation (meters)'
+                            , 'gt_style' : '-'
+                            , 'est_style' : '--'
+                            , 'gt_color' : 'blue'
+                            , 'est_color' : 'red'
+                        }
+            
+        # extract the dictionary values if dictionary is provided as input
+        labels      = plt_dict['labels']
+        title       = plt_dict['title']
+        legend      = plt_dict['legend']
+        figsize     = plt_dict['fig_size']
+        filename    = plt_dict['filename']
+        xlabel      = plt_dict['x_label']
+        ylabel      = plt_dict['y_label']
+        gt_line     = plt_dict['gt_style']
+        est_line    = plt_dict['est_style']
+        gt_color    = plt_dict['gt_color']
+        est_color   = plt_dict['est_color']
+
+        # create output path
+        outpath     = os.path.join(output_path, filename)
+        # create a color cycle for the plot 
+        # color_cycle         = itertools.cycle(plt.rcParams['axes.prop_cycle'].by_key()['color'])
+        # create component cycle for the plot, cycles through the labels
+        component_cycle     = itertools.cycle(labels)
+        fig     = plt.figure(plot_num, figsize = figsize)
+        axes    = fig.subplots(nrows = num_comps, ncols = 1) # create subplots for a single column
+        # wrap in a list if only one component to ensure iterability
+        if num_comps == 1:
+            axes = [axes]
+
+        for ii, ax in enumerate(axes):
+            # color       = next(color_cycle)
+            component   = next(component_cycle)
+
+            ax.plot(time, gt[:, ii], color = gt_color, linestyle = gt_line , label = f'{legend[0]}')
+            ax.plot(time, est[:, ii], color = est_color, linestyle = est_line, label = f'{legend[1]}')
+
+
+            ax.set_xlabel(f'{xlabel}')
+            ax.set_ylabel(f'{component} {ylabel}')
+            ax.legend()
+
+        fig.suptitle(title)
+        plt.tight_layout(rect = [0, 0, 1, 0.95])
+        plt.savefig(outpath)
+        plt.show(block = False) 
+        # this is a non-blocking call, so the program will continue to run after the plot is displayed
+
+    @staticmethod
+    def subplot_singlecol_err_3sig(
+                                            time : np.ndarray
+                                            , err: np.ndarray
+                                            , std : np.ndarray
+                                            , output_path : str
+                                            , plot_num : int
+                                            , plt_dict : Optional[Dict[str, Any]] = None
+                                        ):
+
+        """
+        This function plots the error in ground truth and estimated values for a given set of data within a single subplot, providing 3sigma error
+
+        Inputs:
+        time (np.array): the time values, N x 1 array
+        err (np.array): the error values, N x M array, where N is the number of samples and M is the number of components
+        std (np.array): the std values, N x M arrays, where N is the number of samples and M is the number of components, 
+            M represents the diagonal of the square root of the covariance matrices
+        outputh_path (str): the path to save the plot
+        plot_num (int): the plot number
+        plt_dict (dict): the dictionary containing the plot details
+        """
+
+        # check if the number of components in the ground truth and estimated values are the same
+        num_est_components  = err.shape[1]
+        num_gt_components   = std.shape[1]
+        num_comps           = num_est_components
+        if num_est_components != num_gt_components:
+            raise ValueError('The number of estimated and ground truth components must be the same')
+        
+        err_timesteps       = err.shape[0]
+        std_timesteps       = std.shape[0]
+        provided_timesteps  = time.shape[0]
+        if err_timesteps != std_timesteps or err_timesteps != provided_timesteps or std_timesteps != provided_timesteps:
+            raise ValueError('The number of timesteps in the error and std values must be the same')
+
+        # check if the dictionary is provided 
+        if plt_dict is None:
+            plt_dict    = {
+                            'labels' : ['X', 'Y', 'Z']
+                            , 'title' : "Error with Filter's 3$\sigma$ Covariance Bounds"
+                            , 'legend' : ['Error', "3$\sigma$"]
+                            , 'fig_size' : (10, 8)
+                            , 'filename' : 'err_3sigma.png'
+                            , 'x_label' : 'Time (seconds)' 
+                            , 'y_label' : 'Translation (meters)'
+                            , 'err_style' : '--'
+                            , 'cov_style' : '-'
+                            , 'err_style' : 'blue'
+                            , 'cov_style' : 'red'
+                        }
+            
+        # extract the dictionary values if dictionary is provided as input
+        labels      = plt_dict['labels']
+        title       = plt_dict['title']
+        legend      = plt_dict['legend']
+        figsize     = plt_dict['fig_size']
+        filename    = plt_dict['filename']
+        xlabel      = plt_dict['x_label']
+        ylabel      = plt_dict['y_label']
+        err_line    = plt_dict['err_style']
+        cov_line    = plt_dict['cov_style']
+        err_color   = plt_dict['err_color']
+        cov_color   = plt_dict['cov_color']
+
+        # create output path
+        outpath         = os.path.join(output_path, filename)
+        # create component cycle for the plot, cycles through the labels
+        component_cycle = itertools.cycle(labels)
+        fig     = plt.figure(plot_num, figsize = figsize)
+        axes    = fig.subplots(nrows = num_comps, ncols = 1) # create subplots for a single column
+        # wrap in a list if only one component to ensure iterability
+        if num_comps == 1:
+            axes = [axes]
+
+        for ii, ax in enumerate(axes):
+            # color       = next(color_cycle)
+            component   = next(component_cycle)
+
+            ax.plot(time, err[:, ii], color = err_color, linestyle = err_line , label = f'+{legend[0]}')
+            ax.plot(time, 3 *std[:, ii], color = cov_color, linestyle = cov_line, label = f'-{legend[1]}')
+            ax.plot(time, -3 *std[:, ii], color = cov_color, linestyle = cov_line, label = f'-{legend[1]}')
+
+
+            ax.set_xlabel(f'{xlabel}')
+            ax.set_ylabel(f'{component} {ylabel}')
+            ax.legend()
+
+        fig.suptitle(title)
+        plt.tight_layout(rect = [0, 0, 1, 0.95])
+        plt.savefig(outpath)
+        plt.show(block = False) 
+        # this is a non-blocking call, so the program will continue to run after the plot is displayed
