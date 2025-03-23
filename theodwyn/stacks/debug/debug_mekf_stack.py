@@ -14,7 +14,7 @@ from theodwyn.cameras.ximea                     import XIMEA
 from typing                                     import Optional, List, Union, Any
 from time                                       import time, strftime, sleep
 from rohan.utils.timers                         import IntervalTimer
-from copy                                       import deepcopy
+from copy                                       import deepcopy, copy
 # from queue                                      import Queue
 
 import pdb
@@ -31,10 +31,9 @@ class DebugMEKF(ThreadedStackBase):
         
         if self.source_mode == "camera":
             # initialize the camera using the provided camera configuration.
-            self.camera = XIMEA(**config.camera_configs)
-            self.camera.connect()
+            raise ValueError("Camera mode not supported yet")
         elif self.source_mode == "offline":
-            image_prefix   = config.navigation_configs["image_prefix"]
+            image_prefix    = config.navigation_configs["image_prefix"]
             image_dir       = config.navigation_configs["image_dir"]
             if not image_dir:
                 raise ValueError("Offline mode selected but no 'image_dir' provided in configuration.")
@@ -73,7 +72,7 @@ class DebugMEKF(ThreadedStackBase):
             image_path          = self.image_files[self.image_index]
             self.image_index    += 1
             image               = cv2.imread(image_path)
-            return image, image_path
+            return image, copy(self.image_index)
         return None, None
 
     def process_stack(self) -> None:
@@ -84,12 +83,12 @@ class DebugMEKF(ThreadedStackBase):
           - Sleeps for meas_dt seconds between acquisitions.
         """
         while not self.sigterm.is_set():
-            image, img_path = self.acquire_image()
+            image, img_index = self.acquire_image()
             if image is not None and self.navigation is not None:
                 # Hand off the image to MEKF 
                 # MEKF.spin_meas_model will pick up this frame, perform preprocessing/inference,
                 # and handle first-measurement synchronization 
-                self.navigation.pass_in_frame(image, img_path = img_path)
+                self.navigation.pass_in_frame(image, img_cnt = img_index)
             sleep(self.meas_dt)
 
     def process(self,

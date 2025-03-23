@@ -19,9 +19,11 @@ from rohan.utils.timers                 import IntervalTimer
 from theodwyn.data.writers              import CSVWriter
 from theodwyn.navigations.pose_utils    import InferUtils as iut
 from theodwyn.navigations.pose_utils    import Bearing
+from theodwyn.navigations.pose_utils    import Camera
+from theodwyn.navigations.pose_utils    import PnP
+from theodwyn.navigations.pose_utils    import Projection
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt_Dynamics
-import theodwyn.navigations.measurement
 
 import pdb 
 
@@ -85,22 +87,29 @@ meas_csv_headers    = [
                     ]
 infer_csv_headers   = [
                         'timestamp'
-                        , 'img_fp', 'img_h_pix', 'img_w_pix'
+                        , 'img_id', 'img_input_h_pix', 'img_input_w_pix', 'img_inf_h_pix', 'img_inf_w_pix'
                         , 'box', 'score', 'labels'
-                        , 'keypoints'
+                        , 'keypoints', 'az_el_radians'
                     ]
 
-def build_infer_dict(timestamp, img_fp: str, img_h_pix: int, img_w_pix: int, box: NDArray, score: float, labels: List[str], keypoints: NDArray) -> Dict:
+def build_infer_dict(
+                        timestamp, img_id: str
+                        , img_input_h_pix: int, img_input_w_pix: int, img_inf_h_pix : int, img_inf_w_pix : int, 
+                        box: NDArray, score: float, labels: List[str], keypoints: NDArray, az_el: NDArray
+                        ) -> Dict:
     """ Build an inference dictionary """
     return {
             'timestamp' : timestamp
-            , 'img_fp'  : img_fp
-            , 'img_h_pix': img_h_pix
-            , 'img_w_pix': img_w_pix
+            , 'img_id'  : img_id
+            , 'img_input_h_pix': img_input_h_pix
+            , 'img_input_w_pix': img_input_w_pix
+            , 'img_inf_h_pix': img_inf_h_pix
+            , 'img_inf_w_pix': img_inf_w_pix
             , 'box'     : box.tolist()
             , 'score'   : score
             , 'labels'  : labels
             , 'keypoints': keypoints.tolist()
+            , 'az_el_radians' : az_el.tolist()
             }
 def build_meas_dict(timestamp, p: NDArray, q: NDArray, R: NDArray) -> Dict:
     """ Build a measurement dictionary """
@@ -181,9 +190,16 @@ class MEKF(ThreadedNavigationBase):
         kps_key             : str                   = 'keypoints',
         kscore_key          : str                   = 'keypoint_scores',
         outkeys             : List[str]             = ['boxes', 'labels', 'scores', 'keypoints', 'keypoint_scores'],
-        Kmat                : NDArray               = np.array([[1,0,0],[0,1,0],[0,0,1]]), #TODO: change to actual Kmat
+        Kmat                : NDArray               = None, # always check
+        fl_mm               : float                 = None, # focal length in mm
+        sw_mm               : float                 = None, # sensor width in mm
+        sh_mm               : float                 = None, # sensor height in mm
+        pnp_flag            : int                   = 1, # whether to use pnp to refine azimuth and elevation measurements
+        rnd_dig             : int                   = 3, # round digits 
+
         skpped_count        : int                   = 0,
         source_mode         : str                   = "camera",
+        proj_path           : Optional[str]         = "",
         image_dir           : Optional[str]         = None,
         logger              : Optional[Logger]      = None,
 
@@ -193,7 +209,9 @@ class MEKF(ThreadedNavigationBase):
             self,
             logger = logger
         )
-        self.kps3D     = np.load(kps3D_path)[:num_kps]
+        # self.kps3D     = np.load(os.path.abspath(kps3D_path))[:num_kps]
+        self.kps3D      = np.load(kps3D_path)[:num_kps]
+        self.kps3D_orig = np.vstack([np.zeros((1,3)), self.kps3D])
         self.model_path = model_path
         self.meas_model = meas_model
         self.mekf_dt    = filter_dt
@@ -219,14 +237,33 @@ class MEKF(ThreadedNavigationBase):
         self.kscore_key = kscore_key
         self.outkeys    = outkeys
         self.Kmat       = np.array(Kmat) # ensure that the input is a numpy array, can be initialized from json
+        self.fl_mm      = fl_mm
+        self.sw_mm      = sw_mm
+        self.sh_mm      = sh_mm
+        self.pnp_flag   = pnp_flag
+        self.rnd_dig    = rnd_dig
+        
         self.source_mode= source_mode
         self.image_dir  = image_dir
+        
         self.skipped    = skpped_count
+        if proj_path is not None and proj_path != "":
+            self.proj           = True
+        else:
+            self.proj           = False
+        self.proj_path          = proj_path 
+        self.proj_inf_img_bgr   = None
+        self.proj_inf_bbox      = None
+        self.proj_inf_kps_2D    = None
+        self.proj_nls_kps_2D    = None
+        self.proj_pnp_kps_2D    = None
+        self.proj_img_idx       = None
 
         # thread.Event() works as follows: on -> .set() | off -> .clear() | check -> .is_set()
         self.is_first_meas      = threading.Event() # flag for first measurement
         self.first_meas_proc    = threading.Event() # whether the first measurement has been processed
         self.meas_ready         = threading.Event() # flag for measurement ready
+        self.proj_ready         = threading.Event() # flag for projection ready
 
         self.mekf_prop_timer    = IntervalTimer( interval = self.mekf_dt )
         self.mekf_meas_timer    = IntervalTimer( interval = self.meas_dt) 
@@ -234,6 +271,8 @@ class MEKF(ThreadedNavigationBase):
         # initialize the threaded model
         self.add_threaded_method(target = self.spin_filter )
         self.add_threaded_method(target = self.spin_meas_model)
+        if self.proj:
+            self.add_threaded_method(target = self.spin_projection)
         
         if self.logger:
             self.logger.write(f"MEKF ThreadedNavigationBase Class Initialized", process_name = self.process_name)
@@ -315,43 +354,101 @@ class MEKF(ThreadedNavigationBase):
                 with self._instance_lock:
                     frame_proc = self.frame_in.copy()
                     frame_id   = copy(self.frame_id)
-
-                # cv.imwrite('/home/saa4743/agnc_repos/test320.jpg', self.frame_in)
-                img_np_flt      = iut.cv2_preprocess_img_np(
-                                                                frame_proc
-                                                                , resize_tuple  = self.img_in_size
-                                                                , imagenet_norm = self.imgnet_norm
-                                                                , pad_color     = self.pad_color
-                                                            ).astype(np.float32)
-                # cv.imwrite('/home/saa4743/agnc_repos/test320_2.jpg', img_np_flt)
                 
-                img_h, img_w    = img_np_flt.shape[1], img_np_flt.shape[2]
-                infer_start     = perf_counter()
-                ort_output_dict = iut.ort_krcnn_inference(self.model, self.minput_names, self.moutput_names, img_np_flt, output_keys = self.outkeys) # infer on frame
-                infer_end       = perf_counter()
+                img_input_h, img_input_w    = frame_proc.shape[0], frame_proc.shape[1]
+                if self.proj:
+                    img_rgb_inf, img_bgr_proj   = iut.cv2_preprocess_img_np(
+                                                                            frame_proc
+                                                                            , resize_tuple  = self.img_in_size
+                                                                            , imagenet_norm = self.imgnet_norm
+                                                                            , pad_color     = self.pad_color
+                                                                            , return_bgr    = True
+                                                                        )
+                    img_rgb_inf     = img_rgb_inf.astype(np.float32) 
+                else: 
+                    img_inf_h       = iut.cv2_preprocess_img_np(
+                                                                    frame_proc
+                                                                    , resize_tuple  = self.img_in_size
+                                                                    , imagenet_norm = self.imgnet_norm
+                                                                    , pad_color     = self.pad_color
+                                                                ).astype(np.float32)
+
+                # latest pose estimate
+                pose_est                = np.concatenate([copy(self.mekf.position_est), copy(self.mekf.global_quat_est)]) 
+                # img_rgb_inf is C x H x W
+                img_inf_h, img_inf_w    = img_rgb_inf.shape[1], img_rgb_inf.shape[2]
+                infer_start             = perf_counter()
+                # infer on frame
+                ort_output_dict         = iut.ort_krcnn_inference(self.model, self.minput_names, self.moutput_names, img_rgb_inf, output_keys = self.outkeys) 
+                infer_end               = perf_counter()
+                infer_time              = infer_end - infer_start
                 if self.logger:
-                    self.logger.write(f"Frame Inference Completed in {infer_end - infer_start} seconds on {frame_id}", process_name = self.process_name)
-                try: 
-                    
+                    self.logger.write(f"Inferenced in {infer_time} seconds on Frame ID {frame_id}", process_name = self.process_name)
+                
+                # measurement loop
+                try:
+                    # get highest score box prediction, index corresponding box, keypoints, and labels
                     ort_sco_max_idx = np.argmax(ort_output_dict[self.score_key])
                     ort_sco_m       = ort_output_dict[self.score_key][ort_sco_max_idx]
                     ort_box_m       = ort_output_dict[self.box_key][ort_sco_max_idx]
                     ort_kps_m       = ort_output_dict[self.kps_key][ort_sco_max_idx]
-                    ort_kps_2D      = np.round(ort_kps_m[:, 0:2], 3).astype(np.float32)
-                    az_el,_         = Bearing.compute_azimuth_elevation(ort_kps_2D, self.Kmat)
-                    self.meas_az_el = az_el
+                    ort_kps_2D      = np.round(ort_kps_m[:, 0:2], self.rnd_dig).astype(np.float32)
+                    ort_kps_2D_int  = np.round(ort_kps_2D).astype(np.int32)
+                    inf_str         = f'Inference for {frame_id}: Box: {ort_box_m}, Score: {ort_sco_m:.4f}'
+                    # recalculate camera matrix based on processed image for inference
+                    Kmat_inf        = Camera.camera_matrix(img_inf_w, img_inf_h, self.sw_mm, self.sh_mm, self.fl_mm)
+                    
+                    # if pnp_flag is set, use pnp to refine azimuth and elevation measurements
+                    if self.pnp_flag:
+                        try:
+                            tr_pnp, q_pnp, _= PnP.ransac_pnp_solve(kps_3D = self.kps3D, kps_2D = ort_kps_2D, camera_matrix = Kmat_inf)
+                        except Exception as e:
+                            print(e)
+                            tr_pnp, q_pnp   = PnP.pnp_solve(kps_3D = self.kps3D, kps_2D = ort_kps_2D, camera_matrix = Kmat_inf)
+                        ort_kps_2D  = Projection.project_keypoints(q = q_pnp, r = tr_pnp, K = Kmat_inf, keypoints = self.kps3D)    
+                    # calculate azimuth and elevation and store in self
+                    inf_az_el, _    = Bearing.compute_azimuth_elevation(ort_kps_2D, Kmat_inf)
+                    self.meas_az_el = inf_az_el
+                    if self.proj:
+                        self.proj_ready.set()
+                        self.proj_inf_bbox      = ort_box_m
+                        self.proj_inf_kps_2D    = ort_kps_2D
+                        self.proj_inf_img_bgr   = img_bgr_proj
+                        self.proj_img_idx       = copy(self.frame_id)
+                        pose_proj, _            = self.meas_fcn(pose_est, self.meas_az_el, self.kps3D, self.bearing_std, self.cam_offset)
+                        q_proj, tr_proj         = pose_proj[3:], pose_proj[:3]
+                        # project 3D keypoints to 2D
+                        self.proj_nls_kps_2D    = Projection.project_keypoints(
+                                                                                q = q_proj
+                                                                                , r = tr_proj
+                                                                                , K = Kmat_inf
+                                                                                , keypoints = self.kps3D_orig
+                                                                                )
+                        if self.pnp_flag:
+                            self.proj_pnp_kps_2D= Projection.project_keypoints(
+                                                                                q = q_pnp
+                                                                                , r = tr_pnp
+                                                                                , K = Kmat_inf
+                                                                                , keypoints = self.kps3D_orig
+                                                                                )
+ 
+ 
+
                     if self.logger:
                         self.logger.write(f"Frame Inference Accepted on {frame_id}", process_name = self.process_name)
-                        # self.logger.write(f"Box: {ort_box_m}, Score: {ort_sco_m}, AzEl: {az_el}", process_name = self.process_name)
+                        self.logger.write(inf_str, process_name = self.process_name)
                     self.inf_csvw.write_data({
                                                 'timestamp' : perf_counter()
-                                                , 'img_fp'  : "image_" + str(frame_id)
-                                                , 'img_h_pix': img_h
-                                                , 'img_w_pix': img_w
-                                                , 'box'     : ort_box_m.tolist()
+                                                , 'img_id'  : "image_" + str(frame_id).zfill(5)
+                                                , 'img_input_h_pix': img_input_h
+                                                , 'img_input_w_pix': img_input_w
+                                                , 'img_inf_h_pix': img_inf_h
+                                                , 'img_inf_w_pix': img_inf_w
+                                                , 'box'     : np.round(ort_box_m).tolist()
                                                 , 'score'   : ort_sco_m
                                                 , 'labels'  : ort_output_dict[self.label_key]
-                                                , 'keypoints': ort_kps_2D.tolist()
+                                                , 'keypoints': ort_kps_2D_int.tolist()
+                                                , 'az_el_radians' : inf_az_el.tolist()
                                             })
                     if hasattr(self.inf_csvw, 'file') and self.inf_csvw.file:
                         self.inf_csvw.file.flush()  # flush the file to ensure that the data is written to disk
@@ -363,15 +460,18 @@ class MEKF(ThreadedNavigationBase):
 
                 except Exception as e:
                     self.skipped += 1
-                    fail_str    = f"Inference Failed with Exception: {e} for Image ID {frame_id}: total skipped count: {self.skipped}"
+                    fail_str1   = f"Inference Failed with Exception: {e}"
+                    fail_str2   = f"Failed Inference for Image ID {frame_id}: total skipped count: {self.skipped}"
+                    print(fail_str1), print(fail_str2)
                     if self.logger:
-                        self.logger.write(fail_str, process_name = self.process_name)
+                        self.logger.write(fail_str1, process_name = self.process_name)
+                        self.logger.write(fail_str2, process_name = self.process_name)
             
             self.frame_in   = None # Let go of the frame after processing (or attempting to process it) #TODO: check this
                 
-            pass
+            pass 
 
-            # ensure logger exists with if self.logger: , and change to perf_counter()
+
     def spin_filter( self ) -> None:    
         if self.logger:
             self.logger.write(f"Spinning up Filter", process_name = self.process_name)
@@ -387,7 +487,7 @@ class MEKF(ThreadedNavigationBase):
                     self.first_meas_proc.set()
                     self.is_first_meas.clear()
                     if self.logger:
-                        self.logger.write(f"Filter Initialized and Ready to Run Based on First image", process_name = self.process_name)
+                        self.logger.write(f"Filter initialized with {self.frame_id} image", process_name = self.process_name)
                     self.est_csvw.write_data( build_est_dict(perf_counter(), -1, self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
                     if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
                         # flush the file to ensure that the data is written to disk
@@ -418,11 +518,12 @@ class MEKF(ThreadedNavigationBase):
                 meas_update_ended   = perf_counter()
                 self.mekf.mekf_reset()
                 if self.logger:
+                    time_between    = meas_update_ended - time_update_end
                     self.logger.write(
-                                        f"Filter Measurement Update Performed, corresponding pose {poseJ}, "
-                                        f"Most Recent Time Update Start & End: {time_update_start}, {time_update_end},"
-                                        f"Most Recent Measurement Update Start & End: {meas_update_started}, {meas_update_ended}", 
-                                        process_name = self.process_name)
+                                        f"Meas updated (time between {time_between} s), pose: {poseJ}, "
+                                        # f"Most Recent Time Update Start & End: {time_update_start}, {time_update_end},"
+                                        # f"Most Recent Measurement Update Start & End: {meas_update_started}, {meas_update_ended}", 
+                                        , process_name = self.process_name)
                 self.meas_csvw.write_data( build_meas_dict(perf_counter(), posiJ, quatJ, covarJ) )
                 if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
                     self.meas_csvw.file.flush()
@@ -436,6 +537,71 @@ class MEKF(ThreadedNavigationBase):
 
             #####################################TODO: check this
             pass 
+    
+    def spin_projection(self) -> None:
+        """
+        Threaded Process: Projects 3D keypoints to 2D
+        """
+        while not self.sigterm.is_set():
+            if self.proj and self.proj_ready.is_set():
+                # project inferences if projection path is set
+                inf_proj_color_bgr      = (0, 0, 255) # red
+                pnp_proj_color_bgr      = (57, 21, 57) # deep purple 
+                nls_proj_color_bgr      = (128, 0, 128) # purple
+                origin_proj_color_bgr   = (255, 255, 255) # white
+
+                proj_inf_bbox_kps       = Projection.project_bbox_kps_array_2cv2np(
+                                                                                    self.proj_inf_img_bgr
+                                                                                    , box = self.proj_inf_bbox
+                                                                                    , keypoints = self.proj_inf_kps_2D
+                                                                                    , keypoint_color = inf_proj_color_bgr
+                                                                                    , circle_thickness = -1
+                                                                                    , circle_size = 2
+                                                                                )
+                add_nls_kps             = Projection.project_bbox_kps_array_2cv2np(
+                                                                                    proj_inf_bbox_kps
+                                                                                    , box = None 
+                                                                                    , keypoints = self.proj_nls_kps_2D
+                                                                                    , keypoint_color = nls_proj_color_bgr
+                                                                                    , circle_thickness = 2
+                                                                                    , circle_size = 6
+                                                                                    , origin_color = origin_proj_color_bgr
+                                                                                    , origin_flag = True 
+                                                                                    , origin_size = 3
+                                                                                    , origin_thickness = -1
+                                                                                )
+                img_nls_fn              = f"{self.proj_path}/inf_nls_proj_image_{self.proj_img_idx}.png" 
+                cv.imwrite(img_nls_fn, add_nls_kps)
+                if self.logger:
+                    self.logger.write(f"Projected Inference and NLS Keypoints to {img_nls_fn}", process_name = self.process_name)
+
+                if self.pnp_flag:
+                    add_pnp_kps             = Projection.project_bbox_kps_array_2cv2np(
+                                                                                        proj_inf_bbox_kps.copy()
+                                                                                        , box = None 
+                                                                                        , keypoints = self.proj_pnp_kps_2D
+                                                                                        , keypoint_color = pnp_proj_color_bgr
+                                                                                        , circle_thickness = 2
+                                                                                        , circle_size = 6
+                                                                                        , origin_color = origin_proj_color_bgr
+                                                                                        , origin_flag = True 
+                                                                                        , origin_size = 3
+                                                                                        , origin_thickness = -1
+                                                                                    )
+                    img_pnp_fn              = f"{self.proj_path}/inf_pnp_proj_image_{self.proj_img_idx}.png"
+                    cv.imwrite(img_pnp_fn, add_pnp_kps)
+                    if self.logger:
+                        self.logger.write(f"Projected PNP Keypoints to {img_pnp_fn}", process_name = self.process_name)
+                                                    
+                self.proj_inf_img_bgr   = None
+                self.proj_inf_bbox      = None
+                self.proj_inf_kps_2D    = None
+                self.proj_nls_kps_2D    = None
+                self.proj_pnp_kps_2D    = None
+                self.proj_img_idx       = None
+                self.proj_ready.clear()
+                pass
+
 
     def pass_in_frame( 
         self,
@@ -448,5 +614,5 @@ class MEKF(ThreadedNavigationBase):
         self.frame_in       = image
         self.frame_id       = img_cnt
         # if self.logger:
-        #     self.logger.write(f"Frame Acquired: {img_path}", process_name=self.process_name)
+        #     self.logger.write(f"Frame Acquired: {self.frame_id}", process_name=self.process_name)
             
