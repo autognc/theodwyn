@@ -52,9 +52,7 @@
     "guidance" : {},
     "controller" : {},
     "navigation": {
-        "kps3D_path": "/home/eomer/soho_128.npy",
         "num_kps": 40,
-        "model_path": "/home/eomer/dropout_custom_krcnn_mbnv3_fpn_v2_last_epoch_test_010_soho_40kps.onnx",
         "meas_model": "c++",
         "filter_dt": 0.01,
         "meas_dt": 0.1,
@@ -78,14 +76,11 @@
         "kscore_key": "keypoint_scores",
         "outkeys": ["boxes", "labels", "scores", "keypoints", "keypoint_scores"],
         "Kmat": [[711.111083984375, 0.0, 256.0], [0.0, 711.111083984375, 256.0], [0.0, 0.0, 1.0]],
-	"fl_mm": 6,
-	"sw_mm": 11.314,
-	"sh_mm": 7.12,
-	"pnp_flag": 1,
-
+        "fl_mm": 6,
+        "sw_mm": 11.314,
+        "sh_mm": 7.12,
+        "pnp_flag": 1,
         "image_prefix": "image_", 
-        "source_mode": "offline",
-        "image_dir": "/media/saa4743/Extreme SSD/soho_trajectories/subset_midLighting_jpsmooth2_trajectory",
-	"proj_path": "./proj"
+        "source_mode": "offline"
     }
 }

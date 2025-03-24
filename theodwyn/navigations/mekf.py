@@ -1,12 +1,11 @@
-import os
-import shutil
+# import os
+# import shutil
 import threading
 import numpy                            as np
 import cv2                              as cv
-from copy                               import deepcopy, copy
+from copy                               import copy
 from typing                             import TypeVar, Optional, Tuple, Dict, List
 from numpy.typing                       import NDArray
-from time                               import time, sleep, strftime
 from time                               import perf_counter
 
 
@@ -25,10 +24,10 @@ from theodwyn.navigations.pose_utils    import Projection
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt_Dynamics
 
-import pdb
-import traceback
+# TODO: Move CSV Writing to its own thread with appropriate queuing
 
-SelfMEKF    = TypeVar("SelfMEKF", bound = "MEKF")
+# import pdb
+# import traceback
 
 
 # TIME_AR             = '{:.0f}'.format( perf_counter() )
@@ -56,11 +55,6 @@ SelfMEKF    = TypeVar("SelfMEKF", bound = "MEKF")
 #                 set, command, vicon_data = self.processing_queue.get()
 #                 csv_writer.write_data( [set, *command, *vicon_data[0], *vicon_data[1] ] )
 #             sleep(1)
-
-est_csv_fn          = f"csvs/pe_ests_testing_{strftime('%Y_%m_%d_%H_%M_%S')}.csv"
-meas_csv_fn         = f"csvs/pe_meas_testing_{strftime('%Y_%m_%d_%H_%M_%S')}.csv"
-infer_csv_fn        = f"csvs/pe_infer_testing_{strftime('%Y_%m_%d_%H_%M_%S')}.csv"
-
 
 est_csv_headers     = [
                         'timestamp'
@@ -151,6 +145,7 @@ def build_est_dict(timestamp, meas_flag: int, state: NDArray, global_quat: NDArr
             , 'covar_z' : covar[15,15], 'covar_zdot' : covar[16,16], 'covar_zddot' : covar[17,17] # covariance of position, velocity, acceleration
             }
 
+SelfMEKF    = TypeVar("SelfMEKF", bound = "MEKF")
 class MEKF(ThreadedNavigationBase):
     """
     Model for a MEKF
@@ -162,6 +157,9 @@ class MEKF(ThreadedNavigationBase):
     frame_id                : int
     mekf_prop_timer         : IntervalTimer
     mekf_meas_timer         : IntervalTimer
+    est_csvw                : Optional[CSVWriter]   = None
+    meas_csvw               : Optional[CSVWriter]   = None
+    inf_csvw                : Optional[CSVWriter]   = None
 
     def __init__(
         self,
@@ -197,13 +195,14 @@ class MEKF(ThreadedNavigationBase):
         sh_mm               : float                 = None, # sensor height in mm
         pnp_flag            : int                   = 1, # whether to use pnp to refine azimuth and elevation measurements
         rnd_dig             : int                   = 3, # round digits 
-
         skpped_count        : int                   = 0,
         source_mode         : str                   = "camera",
         proj_path           : Optional[str]         = "",
         image_dir           : Optional[str]         = None,
+        est_csv_fn          : Optional[str]         = None,
+        meas_csv_fn         : Optional[str]         = None,
+        infer_csv_fn        : Optional[str]         = None,
         logger              : Optional[Logger]      = None,
-
         **config_kwargs
     ):
         ThreadedNavigationBase.__init__( 
@@ -277,15 +276,13 @@ class MEKF(ThreadedNavigationBase):
         
         if self.logger:
             self.logger.write(f"MEKF ThreadedNavigationBase Class Initialized", process_name = self.process_name)
-        self.est_csvw   = CSVWriter(filename = est_csv_fn, fieldnames = est_csv_headers)
-        self.meas_csvw  = CSVWriter(filename = meas_csv_fn, fieldnames = meas_csv_headers)
-        self.inf_csvw   = CSVWriter(filename = infer_csv_fn, fieldnames = infer_csv_headers)
-        # open files and write the header
-        self.est_csvw.open_file()
-        self.meas_csvw.open_file()
-        self.inf_csvw.open_file()
-        if self.logger:
-            self.logger.write(f"CSV logging to {est_csv_fn}, {meas_csv_fn}, and {infer_csv_fn} initialized", process_name = self.process_name)
+
+        # >>> CSV Writers
+        if est_csv_fn   : self.est_csvw   = CSVWriter(filename = est_csv_fn, fieldnames = est_csv_headers)
+        if meas_csv_fn  : self.meas_csvw  = CSVWriter(filename = meas_csv_fn, fieldnames = meas_csv_headers)
+        if infer_csv_fn : self.inf_csvw   = CSVWriter(filename = infer_csv_fn, fieldnames = infer_csv_headers)
+
+        if self.logger  : self.logger.write(f"CSV logging to {est_csv_fn}, {meas_csv_fn}, and {infer_csv_fn} initialized", process_name = self.process_name)
         
 
     def init_navigation(self):
@@ -302,37 +299,40 @@ class MEKF(ThreadedNavigationBase):
             self.logger.write(f"MEKF Object Initialized", process_name = self.process_name)
         # measurement fcn setup
         if self.meas_model == 'direct':
-            meas_fh = lambda a, b, c, d, e: MEKF_ppt_Dynamics.nls_direct(a, b, c, d, e) # fix this
+            # meas_fh = lambda a, b, c, d, e: MEKF_ppt_Dynamics.nls_direct(a, b, c, d, e) # fix this
+            meas_fh = MEKF_ppt_Dynamics.nls_direct
         elif self.meas_model == 'local':
-            meas_fh = lambda a, b, c, d, e: MEKF_ppt_Dynamics.nls_local(a, b, c, d, e)
+            # meas_fh = lambda a, b, c, d, e: MEKF_ppt_Dynamics.nls_local(a, b, c, d, e)
+            meas_fh = MEKF_ppt_Dynamics.nls_local
         elif self.meas_model == 'c++':
-            meas_fh = lambda a, b, c, d, e: MEKF_ppt_Dynamics.nls_cpp(a, b, c, d, e)
+            # meas_fh = lambda a, b, c, d, e: MEKF_ppt_Dynamics.nls_cpp(a, b, c, d, e)
+            meas_fh = MEKF_ppt_Dynamics.nls_cpp
         self.meas_fcn   = meas_fh
         if self.logger:
             self.logger.write(f"Measurement Function Set: {self.meas_model}", process_name = self.process_name)
         # example for meas_fcn 
         # start_pose, start_covar = MEKF_ppt_Dynamics.nls_cpp(pose0, azel, kps_3D, bearing_meas_std_rad, tr_co2cam_cbff)
 
-        pass
+
+        # open files and write the header
+        if self.est_csvw    : self.est_csvw.open_file()
+        if self.meas_csvw   : self.meas_csvw.open_file()
+        if self.inf_csvw    : self.inf_csvw.open_file()
+
 
     def deinit_navigation(self):
         """ Deinitialize inference model """
         self.model  = None #may want to revisit for cleanup with onnxruntime
-        if hasattr(self, 'est_csvw'):
+        if self.est_csvw:
             self.est_csvw.close_file()
-            if self.logger:
-                self.logger.write(f"MEKF Pose Estimation CSV Closed", process_name = self.process_name)
-        if hasattr(self, 'meas_csvw'):
+            if self.logger: self.logger.write(f"MEKF Pose Estimation CSV Closed", process_name = self.process_name)
+        if self.meas_csvw:
             self.meas_csvw.close_file()
-            if self.logger:
-                self.logger.write(f"MEKF Measurement CSV Closed", process_name = self.process_name)
-        if hasattr(self, 'inf_csvw'):
+            if self.logger: self.logger.write(f"MEKF Measurement CSV Closed", process_name = self.process_name)
+        if self.inf_csvw:
             self.inf_csvw.close_file()
-            if self.logger:
-                self.logger.write(f"MEKF Inference CSV Closed", process_name = self.process_name)
-        pass
+            if self.logger: self.logger.write(f"MEKF Inference CSV Closed", process_name = self.process_name)
         
-
 
     def spin_meas_model( self ) -> None:
         """
@@ -440,21 +440,22 @@ class MEKF(ThreadedNavigationBase):
                     if self.logger:
                         self.logger.write(f"Frame Inference Accepted on {frame_id}", process_name = self.process_name)
                         self.logger.write(inf_str, process_name = self.process_name)
-                    self.inf_csvw.write_data({
-                                                'timestamp' : perf_counter()
-                                                , 'img_id'  : "image_" + str(frame_id).zfill(5)
-                                                , 'img_input_h_pix': img_input_h
-                                                , 'img_input_w_pix': img_input_w
-                                                , 'img_inf_h_pix': img_inf_h
-                                                , 'img_inf_w_pix': img_inf_w
-                                                , 'box'     : np.round(ort_box_m).tolist()
-                                                , 'score'   : ort_sco_m
-                                                , 'labels'  : ort_output_dict[self.label_key]
-                                                , 'keypoints': ort_kps_2D_int.tolist()
-                                                , 'az_el_radians' : inf_az_el.tolist()
-                                            })
-                    if hasattr(self.inf_csvw, 'file') and self.inf_csvw.file:
-                        self.inf_csvw.file.flush()  # flush the file to ensure that the data is written to disk
+                    if self.inf_csvw : 
+                        self.inf_csvw.write_data({
+                                                    'timestamp' : perf_counter()
+                                                    , 'img_id'  : "image_" + str(frame_id).zfill(5)
+                                                    , 'img_input_h_pix': img_input_h
+                                                    , 'img_input_w_pix': img_input_w
+                                                    , 'img_inf_h_pix': img_inf_h
+                                                    , 'img_inf_w_pix': img_inf_w
+                                                    , 'box'     : np.round(ort_box_m).tolist()
+                                                    , 'score'   : ort_sco_m
+                                                    , 'labels'  : ort_output_dict[self.label_key]
+                                                    , 'keypoints': ort_kps_2D_int.tolist()
+                                                    , 'az_el_radians' : inf_az_el.tolist()
+                                                })
+                    # if hasattr(self.inf_csvw, 'file') and self.inf_csvw.file:
+                    #     self.inf_csvw.file.flush()  # flush the file to ensure that the data is written to disk
                     if not self.first_meas_proc.is_set():
                         # if the first measurement is not set and the measurement is not ready, set the first measurement
                         self.is_first_meas.set()
@@ -463,22 +464,21 @@ class MEKF(ThreadedNavigationBase):
 
                 except Exception as e:
                     self.skipped += 1
-                    fail_str1   = f"Inference Failed with Exception: {e}"
-                    fail_str2   = f"Failed Inference for Image ID {frame_id}: total skipped count: {self.skipped}"
-                    print(fail_str1), print(fail_str2)
-                    traceback.print_exc()
+                    # fail_str1   = f"Inference Failed with Exception: {e}"
+                    # fail_str2   = f"Failed Inference for Image ID {frame_id}: total skipped count: {self.skipped}"
+                    #print(fail_str1), print(fail_str2)
+                    # traceback.print_exc()
                     if self.logger:
-                        self.logger.write(fail_str1, process_name = self.process_name)
-                        self.logger.write(fail_str2, process_name = self.process_name)
+                        self.logger.write( f"Inference Failed with Exception: {e}", process_name = self.process_name)
+                        self.logger.write( f"Failed Inference for Image ID {frame_id}: total skipped count: {self.skipped}", process_name = self.process_name)
             
             self.frame_in   = None # Let go of the frame after processing (or attempting to process it) #TODO: check this
                 
-            pass 
-
 
     def spin_filter( self ) -> None:    
         if self.logger:
             self.logger.write(f"Spinning up Filter", process_name = self.process_name)
+
         while not self.sigterm.is_set():
             if not self.first_meas_proc.is_set():
                 if self.is_first_meas.is_set():
@@ -492,13 +492,13 @@ class MEKF(ThreadedNavigationBase):
                     self.is_first_meas.clear()
                     if self.logger:
                         self.logger.write(f"Filter initialized with {self.frame_id} image", process_name = self.process_name)
-                    self.est_csvw.write_data( build_est_dict(perf_counter(), -1, self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
-                    if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
-                        # flush the file to ensure that the data is written to disk
-                        self.est_csvw.file.flush()
-                    self.meas_csvw.write_data( build_meas_dict(perf_counter(), posi0, quat0, start_R) )
-                    if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
-                        self.meas_csvw.file.flush()
+                    if self.est_csvw : self.est_csvw.write_data( build_est_dict(perf_counter(), -1, self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
+                    # if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
+                    #     # flush the file to ensure that the data is written to disk
+                    #     self.est_csvw.file.flush()
+                    if self.meas_csvw : self.meas_csvw.write_data( build_meas_dict(perf_counter(), posi0, quat0, start_R) )
+                    # if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
+                    #     self.meas_csvw.file.flush()
 
                 # continue to next iteration if first measurement is set 
                 continue 
@@ -528,16 +528,16 @@ class MEKF(ThreadedNavigationBase):
                                         # f"Most Recent Time Update Start & End: {time_update_start}, {time_update_end},"
                                         # f"Most Recent Measurement Update Start & End: {meas_update_started}, {meas_update_ended}", 
                                         , process_name = self.process_name)
-                self.meas_csvw.write_data( build_meas_dict(perf_counter(), posiJ, quatJ, covarJ) )
-                if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
-                    self.meas_csvw.file.flush()
+                if self.meas_csvw : self.meas_csvw.write_data( build_meas_dict(perf_counter(), posiJ, quatJ, covarJ) )
+                # if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
+                #     self.meas_csvw.file.flush()
                 self.meas_ready.clear()  
             
             # record filter estimate
             # in this case, is always false since we clear it after measurement update
-            self.est_csvw.write_data( build_est_dict(perf_counter(), self.meas_ready.is_set(), self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
-            if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
-                self.est_csvw.file.flush()
+            if self.est_csvw: self.est_csvw.write_data( build_est_dict(perf_counter(), self.meas_ready.is_set(), self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
+            # if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
+            #     self.est_csvw.file.flush()
 
             #####################################TODO: check this
             pass 
