@@ -52,9 +52,10 @@
     "guidance" : {},
     "controller" : {},
     "navigation": {
+	    "kps_scale" : 0.05,
         "num_kps": 40,
         "meas_model": "c++",
-        "filter_dt": 0.01,
+        "filter_dt": 0.02,
         "meas_dt": 0.1,
         "process_noise_std": 0.01,
         "meas_noise_std": 0.05,
@@ -80,7 +81,7 @@
         "sw_mm": 11.314,
         "sh_mm": 7.12,
         "pnp_flag": 1,
-        "image_prefix": "image_", 
+        "image_prefix": "image_",
         "source_mode": "offline"
     }
 }

@@ -164,6 +164,7 @@ class MEKF(ThreadedNavigationBase):
     def __init__(
         self,
         kps3D_path          : str, 
+        kps_scale           : float,
         num_kps             : int,
         model_path          : str, 
         meas_model          : str,
@@ -210,7 +211,7 @@ class MEKF(ThreadedNavigationBase):
             logger = logger
         )
         # self.kps3D     = np.load(os.path.abspath(kps3D_path))[:num_kps]
-        self.kps3D      = np.load(kps3D_path)[:num_kps]
+        self.kps3D      = np.load(kps3D_path)[:num_kps] * kps_scale
         self.kps3D_orig = np.vstack([np.zeros((1,3)), self.kps3D])
         self.model_path = model_path
         self.meas_model = meas_model
