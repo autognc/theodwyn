@@ -20,6 +20,7 @@ if __name__ == "__main__":
         json_data = json.load(file)
 
     config                              = StackConfiguration()
+    # config.log_filename                 = ".logs/log.txt"
     config.camera_configs               = json_data["camera"]
     config.network_configs              = json_data["network"]
     config.network_configs[1]["SDA"]    = board.SDA

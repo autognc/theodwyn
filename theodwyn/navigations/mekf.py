@@ -25,7 +25,8 @@ from theodwyn.navigations.pose_utils    import Projection
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt_Dynamics
 
-import pdb 
+import pdb
+import traceback
 
 SelfMEKF    = TypeVar("SelfMEKF", bound = "MEKF")
 
@@ -366,7 +367,7 @@ class MEKF(ThreadedNavigationBase):
                                                                         )
                     img_rgb_inf     = img_rgb_inf.astype(np.float32) 
                 else: 
-                    img_inf_h       = iut.cv2_preprocess_img_np(
+                    img_rgb_inf     = iut.cv2_preprocess_img_np(
                                                                     frame_proc
                                                                     , resize_tuple  = self.img_in_size
                                                                     , imagenet_norm = self.imgnet_norm
@@ -377,9 +378,11 @@ class MEKF(ThreadedNavigationBase):
                 pose_est                = np.concatenate([copy(self.mekf.position_est), copy(self.mekf.global_quat_est)]) 
                 # img_rgb_inf is C x H x W
                 img_inf_h, img_inf_w    = img_rgb_inf.shape[1], img_rgb_inf.shape[2]
+                
                 infer_start             = perf_counter()
                 # infer on frame
                 ort_output_dict         = iut.ort_krcnn_inference(self.model, self.minput_names, self.moutput_names, img_rgb_inf, output_keys = self.outkeys) 
+                
                 infer_end               = perf_counter()
                 infer_time              = infer_end - infer_start
                 if self.logger:
@@ -397,7 +400,7 @@ class MEKF(ThreadedNavigationBase):
                     inf_str         = f'Inference for {frame_id}: Box: {ort_box_m}, Score: {ort_sco_m:.4f}'
                     # recalculate camera matrix based on processed image for inference
                     Kmat_inf        = Camera.camera_matrix(img_inf_w, img_inf_h, self.sw_mm, self.sh_mm, self.fl_mm)
-                    
+
                     # if pnp_flag is set, use pnp to refine azimuth and elevation measurements
                     if self.pnp_flag:
                         try:
@@ -463,6 +466,7 @@ class MEKF(ThreadedNavigationBase):
                     fail_str1   = f"Inference Failed with Exception: {e}"
                     fail_str2   = f"Failed Inference for Image ID {frame_id}: total skipped count: {self.skipped}"
                     print(fail_str1), print(fail_str2)
+                    traceback.print_exc()
                     if self.logger:
                         self.logger.write(fail_str1, process_name = self.process_name)
                         self.logger.write(fail_str2, process_name = self.process_name)

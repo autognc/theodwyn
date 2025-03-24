@@ -1614,7 +1614,7 @@ class InferUtils:
                 logging.info(output_s_str)
     
     @staticmethod
-    def onnx_model_setup(model_path, ort_device = ['CPUExecutionProvider']):
+    def onnx_model_setup(model_path, ort_device = ['CUDAExecutionProvider']):
         """
         Creates ONNX Runtime model by taking in the path to an ONNX model and returns the session, input name and output names
 
