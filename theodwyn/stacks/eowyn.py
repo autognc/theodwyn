@@ -1,27 +1,26 @@
 import numpy                                    as     np
+from numpy.linalg                               import norm
 from numpy.typing                               import NDArray
 from math                                       import sqrt, pi, cos, sin
-from rohan.common.base_stacks                   import StackBase
+from rohan.common.base_stacks                   import ThreadedStackBase
 from rohan.common.logging                       import Logger
 from rohan.data.classes                         import StackConfiguration
-from theodwyn.networks.adafruit                 import Adafruit_PCA9685
 from theodwyn.networks.comm_prot                import ZMQDish
 from theodwyn.networks.sabertooth               import SabertoothSimpleSerial
 from theodwyn.networks.vicon                    import ViconConnection
 from theodwyn.controllers.viconfeedback         import ViconFeedback, VFB_Setpoints
-from theodwyn.guidances.file_interpreters       import CSVInterpreter
+from theodwyn.guidances.presets                 import Preset2DShapes
+from theodwyn.utils.data_format                 import wrap_to_pi
 from theodwyn.manipulators.mechanum_wheel_model import Mechanum4Wheels
 from typing                                     import Optional, List, Union, Any
-from time                                       import time
+from time                                       import time, sleep
 from rohan.utils.timers                         import IntervalTimer
-SQRT2O2                     = sqrt(2)/2
+from theodwyn.stacks.eomer                      import LX, LY, WRADIUS, TS_CONST, AUTO_THROTTLE_THRES
+SQRT2O2                 = sqrt(2)/2
+DEBUGGING               = False
 
 # TODO: PARSE THE FOLLOWING SETTINGS
 # >> CALIBRATED MOTOR CONSTANTS
-LX                      = 0.165
-LY                      = 0.11
-WRADIUS                 = 0.075
-TS_CONST                = 17.224737008062963 # [rad/s]
 EULER_ORIENTATION_INIT  = [ 0., 0., -pi ] # XYZ Sequence
 AUTO_THROTTLE_THRES     = 0.7
 
@@ -32,9 +31,11 @@ SWITCH_COOLDOWN             = 3.
 TRIGGER_HOLDTIME            = 1.
 
 # >> VICON PREFERENCES
-OBJECT_NAME                 = "eomer"
+OBJECT_NAME                 = "eowyn"
+INIT_DIST_THRESHOLD         = 0.2      # NOTE: About 8 Inches
+INIT_ANGLE_THRESHOLD        = 0.2      # NOTE: About 11 degrees
 
-class EomerStack(StackBase):
+class EowynStack(ThreadedStackBase):
     """
     Eomer's Stack
     :param config: The stack configuration whose format can be found at .data.classes
@@ -49,6 +50,7 @@ class EomerStack(StackBase):
     holding_buttons : List[bool]
     control_mode    : bool    = False # (False->Manual, True->Auto)
     rotation_matrix : NDArray = np.identity(2)
+    guidance_ready  : bool    = False
 
     def __init__( 
         self, 
@@ -90,29 +92,29 @@ class EomerStack(StackBase):
 
     def process( 
         self, 
-        network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,ViconConnection]] ]   = None, 
+        network    : Optional[ List[Union[ZMQDish,SabertoothSimpleSerial,ViconConnection]] ]   = None, 
         camera     : Optional[Any]                                                                              = None, 
         controller : Optional[ViconFeedback]                                                                    = None,
-        guidance   : Optional[CSVInterpreter]                                                                   = None, 
+        guidance   : Optional[Preset2DShapes]                                                                   = None, 
         navigation : Optional[Any]                                                                              = None,
         logger     : Optional[Logger]                                                                           = None
     ) -> None:
         """
         > Networks
             0 : ZMQDish
-            1 : ADAfruit PCA
+            1 : Sabertooth 2x12
             2 : Sabertooth 2x12
-            3 : Sabertooth 2x12
-            4 : ViconConnection
+            3 : ViconConnection
         > Cameras:
-            1 : Ximea (NOT INTEGRATED)
+            None
         > Controllers:
               : Vicon Feedback
         """
 
-        camera_command, wheel_throttles = None, [ 0. , 0. , 0. , 0. ]
+        wheel_throttles = [ 0. , 0. , 0. , 0. ]
 
         # >>>>>>>>>>>>>>>>>>>>>>>>> Manual Control Functionality
+
         if network[0]:
             _, xwc_input = network[0].recv()
 
@@ -138,6 +140,9 @@ class EomerStack(StackBase):
                         self.held_buttons[1]    = time()
                     if time() - self.held_buttons[1] > TRIGGER_HOLDTIME and self.control_switch.check_interval(): 
                         self.control_mode = not self.control_mode
+                        if self.guidance_ready: 
+                            self.guidance_ready = False
+                            if guidance: guidance.reset_guidance()
                         if logger:
                             mode = "Manual" if not self.control_mode else "Auto"
                             logger.write( f"Switching Mode to : {mode}", self.process_name )
@@ -147,13 +152,6 @@ class EomerStack(StackBase):
                 # >> Read Manual Control Inputs
                 if not self.control_mode:
                     
-                    # >> Control camera from right-analog stick
-                    r_analog  = xwc_input[3:5]
-                    delta_pan_command, delta_tilt_command = 0.,0.
-                    if abs(r_analog[0]) > 0.2: delta_pan_command  = self.cntl_factor * -r_analog[0]
-                    if abs(r_analog[1]) > 0.2: delta_tilt_command = self.cntl_factor * r_analog[1] 
-                    camera_command = [ delta_pan_command, delta_tilt_command ]
-                    
                     # >> Control Base from left-analog stick
                     l_analog     = xwc_input[0:2]
                     bumper_diff  = xwc_input[10] - xwc_input[11]
@@ -161,38 +159,42 @@ class EomerStack(StackBase):
                     if abs(l_analog[0]) > 0.1: v[0] = -WRADIUS * MAX_THROTTLE * l_analog[0]
                     if abs(l_analog[1]) > 0.1: v[1] = -WRADIUS * MAX_THROTTLE * l_analog[1]
                     if abs(bumper_diff) > 0.5: v[2] =  WRADIUS * MAX_OMEGA    * bumper_diff/abs(bumper_diff)
-                    if np.linalg.norm(v,2) > WRADIUS * MAX_THROTTLE * SQRT2O2 : 
-                        v *= ( WRADIUS * MAX_THROTTLE * SQRT2O2 )/np.linalg.norm(v,2)
+                    if norm(v,2) > WRADIUS * MAX_THROTTLE * SQRT2O2 : 
+                        v *= ( WRADIUS * MAX_THROTTLE * SQRT2O2 )/norm(v,2)
 
                     wheel_throttles  = ( self.mechanum_ijacob @ v ).flatten()
 
-                    for throttle in wheel_throttles:
-                        if abs(throttle) > AUTO_THROTTLE_THRES:
-                            wheel_throttles *= AUTO_THROTTLE_THRES/abs(throttle)
-                            if logger:
-                                logger.write( 
-                                    "Commanded wheel throttle - {:2f} exceeds threshold - {:.2f}. Scaling down ...".format(throttle,AUTO_THROTTLE_THRES), 
-                                    process_name=self.process_name 
-                                )
         # >>>>>>>>>>>>>>>>>>>>>>>>> Autonomous Control Functionality
 
         if self.control_mode and controller and guidance:
             set_points  = VFB_Setpoints()
-            guide       = guidance.determine_guidance()
-            if not guide is None:
-                if 'x' in guide and 'y' in guide    : set_points.pos_xy  = np.array( [ float(guide['x'])  , float(guide['y']) ] ).flatten()
-                if 'v_x' in guide and 'v_y' in guide: set_points.vel_xy  = np.array( [ float(guide['v_x']), float(guide['v_y']) ] ).flatten()
-                if 'yaw' in guide                   : set_points.ang_yaw = float(guide['yaw'])
+            if not self.guidance_ready: guide = guidance.get_init_guidance()
+            else:                       guide = guidance.determine_guidance()
+                
 
-                if network[4]: # >>> Try to pull data from vicon system
-                    vicon_data = network[4].recv_pose( object_name=OBJECT_NAME, ret_quat=False )
+            if not guide is None:
+                if 'x' in guide and 'y' in guide     : set_points.pos_xy  = np.array( [ float(guide['x'])  , float(guide['y'])   ] ).flatten()
+                if 'v_x' in guide and 'v_y' in guide : set_points.vel_xy  = np.array( [ float(guide['v_x']), float(guide['v_y']) ] ).flatten()
+                if 'yaw' in guide                    : set_points.ang_yaw = float(guide['yaw'])
+
+                if network[3]: # >>> Try to pull object data from vicon system
+
+                    # >>> Vicon Pulls (1/2) -> For Platform Control
+                    vicon_data = network[3].recv_pose( object_name=OBJECT_NAME, ret_quat=False )
+
                     if vicon_data.succeeded: 
                         self._update_rotation_matrix( vicon_orientation=vicon_data.orientation_euler )
                         v_cmd, _ = controller.determine_control( 
                             pos_xy_vicon    = 1E-3*np.array(vicon_data.position[0:2]).flatten(), 
                             ang_yaw_vicon   = vicon_data.orientation_euler[2],
                             set_points      = set_points 
-                        ) 
+                        )
+
+                        if ( not self.guidance_ready ):
+                            dist_2init = norm( np.array( [ guide['x'], guide['y'] ] ) - 1E-3*np.array(vicon_data.position[0:2]), 2 ) 
+                            dang_2init = abs( wrap_to_pi( guide['yaw'] - vicon_data.orientation_euler[2] ) ) 
+                            if dist_2init < INIT_DIST_THRESHOLD and dang_2init < INIT_ANGLE_THRESHOLD:
+                                self.guidance_ready = True
 
                         if not self.logged_startframe: 
                             self.logged_startframe = True    
@@ -204,6 +206,9 @@ class EomerStack(StackBase):
                                 )
 
                     else: # >> Otherwise only allows for feedforward control
+                        v_cmd, _ = controller.determine_control(set_points=set_points) 
+                        
+                else: # >> Otherwise only allows for feedforward control
                         v_cmd, _ = controller.determine_control(set_points=set_points) 
 
             else: # >> Otherwise only allows for feedforward control
@@ -222,15 +227,17 @@ class EomerStack(StackBase):
             wheel_throttles = wheel_speeds / TS_CONST
 
         # >>>>>>>>>>>>>>>>>>>>>>>>> Send Throttle and Camera Commands Functionality
-        if camera_command is not None and network[1]:
-            network[1].send( 
-                cmd = [ 
-                    camera_command[0] + network[1].servokit.servo[0].angle,
-                    camera_command[1] + network[1].servokit.servo[1].angle,
-                ] 
-            )
-        if wheel_throttles is not None and network[2] and network[3]:
-            network[2].send_throttles( [ wheel_throttles[0], wheel_throttles[2] ] ) 
-            network[3].send_throttles( [ wheel_throttles[3], wheel_throttles[1] ] ) 
+
+        if wheel_throttles is not None and network[1] and network[2]:
+            for throttle in wheel_throttles:
+                if abs(throttle) > AUTO_THROTTLE_THRES:
+                    wheel_throttles *= AUTO_THROTTLE_THRES/abs(throttle)
+                    if logger:
+                        logger.write( 
+                            "Commanded wheel throttle - {:2f} exceeds threshold - {:.2f}. Scaling down ...".format(throttle,AUTO_THROTTLE_THRES), 
+                            process_name=self.process_name 
+                        )
+            network[1].send_throttles( [ wheel_throttles[0], wheel_throttles[2] ] ) 
+            network[2].send_throttles( [ wheel_throttles[3], wheel_throttles[1] ] ) 
 
              

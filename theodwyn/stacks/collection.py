@@ -3,7 +3,7 @@ from cv2                                        import imwrite
 import numpy                                    as     np
 from numpy.linalg                               import norm
 from numpy.typing                               import NDArray
-from math                                       import sqrt, pi, cos, sin, atan2
+from math                                       import sqrt, pi, cos, sin, atan2, degrees
 from rohan.common.base_stacks                   import ThreadedStackBase
 from rohan.common.logging                       import Logger
 from rohan.data.classes                         import StackConfiguration
@@ -18,12 +18,11 @@ from theodwyn.utils.rotations                   import Rot_123
 from theodwyn.utils.data_format                 import wrap_to_pi
 from theodwyn.manipulators.mechanum_wheel_model import Mechanum4Wheels
 from typing                                     import Optional, List, Union, Any
-from time                                       import time, sleep
+from time                                       import time, sleep, perf_counter
 from queue                                      import Queue
 from rohan.utils.timers                         import IntervalTimer
 from copy                                       import deepcopy
-SQRT2O2                     = sqrt(2)/2
-
+SQRT2O2                 = sqrt(2)/2
 DEBUGGING               = False
 
 # TODO: PARSE THE FOLLOWING SETTINGS
@@ -34,7 +33,6 @@ WRADIUS                 = 0.075
 TS_CONST                = 17.224737008062963 # [rad/s]
 EULER_ORIENTATION_INIT  = [ 0., 0., -pi ] # XYZ Sequence
 AUTO_THROTTLE_THRES     = 0.7
-CAMERA_PLANE_OFFSET     = [ 0. , 0. , -0.030 ]
 
 # >> MANUAL CONTROL PREFERENCES
 MAX_THROTTLE                = 0.50
@@ -46,8 +44,14 @@ TRIGGER_HOLDTIME            = 1.
 OBJECT_NAME                 = "eomer"
 CAMERA_NAME                 = "eomer_cam"
 TARGET_NAME                 = "soho"
-INIT_DIST_THRESHOLD         = 0.2      # NOTE: About 2 Inches
-INIT_ANGLE_THRESHOLD        = 0.2       # NOTE: About 6 degrees
+INIT_DIST_THRESHOLD         = 0.2       # NOTE: About 8 Inches
+INIT_ANGLE_THRESHOLD        = 0.2       # NOTE: About 11 degrees
+INIT_CAM_ANGLE_THRESHOLD    = 0.05      # NOTE: About 11 degrees
+CAMERA_OFFSET               = np.array( [ 0. ,  0.030 ,  0.010 ] )
+TARGET_OFFSET               = np.array( [ 0. ,  0.000 ,  0.100 ] )
+
+# >> GUIDANCE PREFERENCES
+GUIDANCE_AWAIT_TIME         = 10.        # NOTE: 1 Second
 
 # >> DATA RECORD PREFERENCES 
 RECORD_OBJECT_1   = "eomer_cam"
@@ -63,11 +67,7 @@ SAVE_DIR            = f"{USB_DIR}/run_{TIME_AR}"
 IMAGE_FOLDER        = f"{SAVE_DIR}/images"
 VICON_FOLDER        = f"{SAVE_DIR}"
 
-if not os.path.exists(IMAGE_FOLDER): 
-    os.makedirs(IMAGE_FOLDER,exist_ok=True)
-if not os.path.exists(VICON_FOLDER): 
-    os.makedirs(VICON_FOLDER,exist_ok=True)
-
+# >>> CSV Preferences
 CSV_FILENAME        = f"{VICON_FOLDER}/vicon_sc_{TIME_AR}.csv"
 CSV_FIELDNAMES      = [
     "ID",
@@ -100,9 +100,10 @@ class CollectionStack(ThreadedStackBase):
     cntl_factor     : float
     held_buttons    : List[float]
     holding_buttons : List[bool]
-    control_mode    : bool    = False # (False->Manual, True->Auto)
-    rotation_matrix : NDArray = np.identity(2)
-    guidance_ready  : bool    = False
+    control_mode    : bool              = False # (False->Manual, True->Auto)
+    rotation_matrix : NDArray           = np.identity(2)
+    guidance_ready  : bool              = False
+    guidance_stime  : Optional[float]   = None
     processing_queue: Queue
 
     def __init__( 
@@ -132,7 +133,8 @@ class CollectionStack(ThreadedStackBase):
 
         # >> Queues 
         self.processing_queue = Queue(maxsize=MAX_QUEUE_SIZE)
-        self.add_threaded_method( target=self.data_saving )
+        if not DEBUGGING:
+            self.add_threaded_method( target=self.data_saving )
 
 
     def _update_rotation_matrix( 
@@ -147,6 +149,8 @@ class CollectionStack(ThreadedStackBase):
         self.rotation_matrix = _R3( vicon_orientation[2] )
 
     def data_saving(self):
+        if not os.path.exists(IMAGE_FOLDER): os.makedirs(IMAGE_FOLDER,exist_ok=True)
+        if not os.path.exists(VICON_FOLDER): os.makedirs(VICON_FOLDER,exist_ok=True)
         with CSVWriter(filename=CSV_FILENAME,fieldnames=CSV_FIELDNAMES) as csv_writer:
             count  = 0
             while not self.sigterm.is_set():
@@ -224,6 +228,7 @@ class CollectionStack(ThreadedStackBase):
                         self.control_mode = not self.control_mode
                         if self.guidance_ready: 
                             self.guidance_ready = False
+                            self.guidance_stime = None
                             if guidance: guidance.reset_guidance()
                         if logger:
                             mode = "Manual" if not self.control_mode else "Auto"
@@ -248,78 +253,101 @@ class CollectionStack(ThreadedStackBase):
                     if abs(l_analog[0]) > 0.1: v[0] = -WRADIUS * MAX_THROTTLE * l_analog[0]
                     if abs(l_analog[1]) > 0.1: v[1] = -WRADIUS * MAX_THROTTLE * l_analog[1]
                     if abs(bumper_diff) > 0.5: v[2] =  WRADIUS * MAX_OMEGA    * bumper_diff/abs(bumper_diff)
-                    if np.linalg.norm(v,2) > WRADIUS * MAX_THROTTLE * SQRT2O2 : 
-                        v *= ( WRADIUS * MAX_THROTTLE * SQRT2O2 )/np.linalg.norm(v,2)
+                    if norm(v,2) > WRADIUS * MAX_THROTTLE * SQRT2O2 : 
+                        v *= ( WRADIUS * MAX_THROTTLE * SQRT2O2 )/norm(v,2)
 
                     wheel_throttles  = ( self.mechanum_ijacob @ v ).flatten()
-
-                    for throttle in wheel_throttles:
-                        if abs(throttle) > AUTO_THROTTLE_THRES:
-                            wheel_throttles *= AUTO_THROTTLE_THRES/abs(throttle)
-                            if logger:
-                                logger.write( 
-                                    "Commanded wheel throttle - {:2f} exceeds threshold - {:.2f}. Scaling down ...".format(throttle,AUTO_THROTTLE_THRES), 
-                                    process_name=self.process_name 
-                                )
 
         # >>>>>>>>>>>>>>>>>>>>>>>>> Autonomous Control Functionality
 
         if self.control_mode and controller and guidance:
             set_points  = VFB_Setpoints()
-            if not self.guidance_ready: guide = guidance.get_init_guidance()
+            
+            if (not self.guidance_stime is None) and (perf_counter() - self.guidance_stime > GUIDANCE_AWAIT_TIME):
+                self.guidance_stime = None 
+                self.guidance_ready = True 
+                if logger:
+                    logger.write(
+                        f"Autonomous Guidance starting NOW",
+                        self.process_name
+                    )
+            
+            standby = False
+            if not self.guidance_ready:
+                if self.guidance_stime is None:
+                    guide = guidance.get_init_guidance()
+                else:
+                    # NOTE: Robots will be sit in standby until guidance wait time has passed
+                    # NOTE: This is different than when guide is None
+                    guide   = {} 
+                    standby = True
             else:                       
                 guide = guidance.determine_guidance()
-                if network[4]: # >>> Try to pull camera and target data from vicon system
-                    cam_vicon_data  = network[4].recv_pose( object_name=CAMERA_NAME, ret_quat=False )
-                    trgt_vicon_data = network[4].recv_pose( object_name=TARGET_NAME, ret_quat=False )
-                    
-                    if cam_vicon_data.succeeded and trgt_vicon_data.succeeded:
-                        cam2trgt_vff    = [ pnt_1 - ( pnt_0 + off_0 ) for pnt_1, pnt_0, off_0 in zip( trgt_vicon_data.position, cam_vicon_data.position, CAMERA_PLANE_OFFSET ) ] 
-                        camz_vff        = ( Rot_123(*cam_vicon_data.orientation_euler).T @ np.array( [0.,0.,1.] ) ).flatten()
-                        cam2trgt_vff_plnorm, camz_vff_plnorm = norm( cam2trgt_vff[0:2] ), norm( camz_vff[0:2] )
+            
 
-                        guide['ang_dpt'] = np.array(
-                            [
-                                atan2( cam2trgt_vff[1], cam2trgt_vff[0] )     - atan2( camz_vff[1], camz_vff[0] ),
-                                atan2( cam2trgt_vff[2], cam2trgt_vff_plnorm ) - atan2( camz_vff[2], camz_vff_plnorm )
-                            ]
-                        )
-
-            if not guide is None:
+            if not guide is None and not standby:
                 if 'x' in guide and 'y' in guide     : set_points.pos_xy  = np.array( [ float(guide['x'])  , float(guide['y'])   ] ).flatten()
                 if 'v_x' in guide and 'v_y' in guide : set_points.vel_xy  = np.array( [ float(guide['v_x']), float(guide['v_y']) ] ).flatten()
                 if 'yaw' in guide                    : set_points.ang_yaw = float(guide['yaw'])
-                if 'ang_dpt' in guide                : set_points.ang_dpt = np.array( [ wrap_to_pi(pnt) for pnt in guide['ang_dpt'] ] )
+                if 'av_z'in guide                    : set_points.avel_z  = float(guide['av_z'])
+                
+                pos_xy_vicon, ang_yaw_vicon = None, None
 
-                if network[4]: # >>> Try to pull object data from vicon system
+                if network[4]: 
+
+                    # >>> VICON DATA PULL (1/2) -> For Platform Control
                     vicon_data = network[4].recv_pose( object_name=OBJECT_NAME, ret_quat=False )
                     
-                    if camera and not DEBUGGING:
+                    if camera and self.guidance_ready and not DEBUGGING:
                         merged_vicon_data = len(RECORD_OBJECTS)*[None]
                         all_succeeded = True
+                        
                         for i, object_name in enumerate(RECORD_OBJECTS):
                             vicon_data_i            = deepcopy( network[4].recv_pose( object_name=object_name ) )
                             merged_vicon_data[i]    = [ *vicon_data_i.position, *vicon_data_i.orientation_quat ]
                             if not vicon_data_i.succeeded: 
                                 all_succeeded = False
                                 break
+                        
                         if all_succeeded:
                             frame = camera.get_frame()
                             self.processing_queue.put( (frame, merged_vicon_data) )
 
-                    if vicon_data.succeeded: 
-                        self._update_rotation_matrix( vicon_orientation=vicon_data.orientation_euler )
-                        v_cmd, dpt_cmd = controller.determine_control( 
-                            pos_xy_vicon    = 1E-3*np.array(vicon_data.position[0:2]).flatten(), 
-                            ang_yaw_vicon   = vicon_data.orientation_euler[2],
-                            set_points      = set_points 
+                    # >>> VICON DATA PULL (2/2) -> For Camera Control
+                    cam_vicon_data  = network[4].recv_pose( object_name=CAMERA_NAME, ret_quat=False )
+                    trgt_vicon_data = network[4].recv_pose( object_name=TARGET_NAME, ret_quat=False )
+
+                    if cam_vicon_data.succeeded and trgt_vicon_data.succeeded:
+                        trgt_cp_pos     = trgt_vicon_data.position + Rot_123(*trgt_vicon_data.orientation_euler).T @ TARGET_OFFSET
+                        cam_rotm        = Rot_123(*cam_vicon_data.orientation_euler)
+                        cam_cp_pos      = cam_vicon_data.position + cam_rotm.T @ CAMERA_OFFSET
+                        cam2trgt_vff    = trgt_cp_pos - cam_cp_pos
+                        camz_vff        = ( cam_rotm.T @ np.array( [0.,0.,1.] ) ).flatten()
+                        cam2trgt_vff_plnorm, camz_vff_plnorm = norm( cam2trgt_vff[0:2] ), norm( camz_vff[0:2] )
+                        set_points.ang_dpt = np.array(
+                            [
+                                wrap_to_pi( atan2( cam2trgt_vff[1], cam2trgt_vff[0] )     - atan2( camz_vff[1], camz_vff[0] ) ),
+                                wrap_to_pi( atan2( cam2trgt_vff[2], cam2trgt_vff_plnorm ) - atan2( camz_vff[2], camz_vff_plnorm ) )
+                            ]
                         )
 
-                        if not self.guidance_ready:
-                            dist_2init = np.linalg.norm( np.array( [ guide['x'], guide['y'] ] ) - 1E-3*np.array(vicon_data.position[0:2]) ) 
-                            dang_2init = abs( wrap_to_pi( guide['yaw'] - vicon_data.orientation_euler[2] ) ) 
-                            if dist_2init < INIT_DIST_THRESHOLD and dang_2init < INIT_ANGLE_THRESHOLD:
-                                self.guidance_ready = True
+                    # >>> DETERMINE GUIDANCE MODES
+                    if vicon_data.succeeded: 
+                        self._update_rotation_matrix( vicon_orientation=vicon_data.orientation_euler )
+                        pos_xy_vicon    = 1E-3*np.array(vicon_data.position[0:2]).flatten()
+                        ang_yaw_vicon   = vicon_data.orientation_euler[2]
+
+                        if ( not self.guidance_ready ) and ( not set_points.ang_dpt is None ):
+                            dist_2init = norm( set_points.pos_xy - 1E-3*np.array(vicon_data.position[0:2]), 2 ) 
+                            dang_2init = abs( wrap_to_pi( set_points.ang_yaw - vicon_data.orientation_euler[2] ) ) 
+                            cdang_2init= norm( set_points.ang_dpt, 2 )
+                            if dist_2init < INIT_DIST_THRESHOLD and dang_2init < INIT_ANGLE_THRESHOLD and cdang_2init < INIT_CAM_ANGLE_THRESHOLD:
+                                self.guidance_stime = perf_counter()
+                                if logger:
+                                    logger.write(
+                                        f"Autonomous Guidance will begin in {GUIDANCE_AWAIT_TIME} seconds",
+                                        self.process_name
+                                    )
 
                         if not self.logged_startframe: 
                             self.logged_startframe = True    
@@ -330,26 +358,29 @@ class CollectionStack(ThreadedStackBase):
                                     self.process_name
                                 )
 
-                    else: # >> Otherwise only allows for feedforward control
-                        v_cmd, dpt_cmd = controller.determine_control(set_points=set_points) 
-
-            else: # >> Otherwise only allows for feedforward control
-                v_cmd, dpt_cmd = controller.determine_control(set_points=set_points)                 
+                # >>> DETERMINE VICON FEEDBACK FROM VICON PULLS 
+                v_cmd, dpt_cmd = controller.determine_control(
+                    pos_xy_vicon    = pos_xy_vicon,
+                    ang_yaw_vicon   = ang_yaw_vicon,
+                    set_points      = set_points
+                )
             
-            # ----------------------------------------------------------------------------------
-            # NOTE: The following swap is an artifact of the mixing matrix mechanum_ijacob
-            #       being altered for the controller input. This functionality is flawed and 
-            #       is a known issue that will be later addressed
-            # ----------------------------------------------------------------------------------
-
-            v_cmd[0], v_cmd[1] = v_cmd[1], v_cmd[0]
+                # ----------------------------------------------------------------------------------
+                # NOTE: The following swap is an artifact of the mixing matrix mechanum_ijacob
+                #       being altered for the controller input. This functionality is flawed and 
+                #       is a known issue that will be later addressed
+                # ----------------------------------------------------------------------------------
+                v_cmd[0], v_cmd[1]  = v_cmd[1], v_cmd[0]            
+                v_cmd[0:2]          = ( self.rotation_matrix @ v_cmd[0:2] ).flatten()
+                wheel_speeds        = ( self.mechanum_ijacob @ v_cmd ).flatten() 
+                wheel_throttles     = wheel_speeds / TS_CONST
+                if not dpt_cmd is None:
+                    camera_command  = [ degrees(dpt_cmd[0]), -degrees(dpt_cmd[1])  ]
             
-            v_cmd[0:2]      = ( self.rotation_matrix @ v_cmd[0:2] ).flatten()
-            wheel_speeds    = ( self.mechanum_ijacob @ v_cmd ).flatten() 
-            wheel_throttles = wheel_speeds / TS_CONST
-            if not dpt_cmd is None:
-                camera_command  = [ -dpt_cmd[0], -dpt_cmd[1]  ]
-
+            elif guide is None:
+                if guidance                         : guidance.reset_guidance()
+                if self.guidance_ready              : self.guidance_ready = False
+                if not self.guidance_stime is None  : self.guidance_stime = None
         # >>>>>>>>>>>>>>>>>>>>>>>>> Send Throttle and Camera Commands Functionality
 
         if camera_command is not None and network[1]:
@@ -359,7 +390,16 @@ class CollectionStack(ThreadedStackBase):
                     camera_command[1] + network[1].servokit.servo[1].angle,
                 ] 
             )
+
         if wheel_throttles is not None and network[2] and network[3]:
+            for throttle in wheel_throttles:
+                if abs(throttle) > AUTO_THROTTLE_THRES:
+                    wheel_throttles *= AUTO_THROTTLE_THRES/abs(throttle)
+                    if logger:
+                        logger.write( 
+                            "Commanded wheel throttle - {:2f} exceeds threshold - {:.2f}. Scaling down ...".format(throttle,AUTO_THROTTLE_THRES), 
+                            process_name=self.process_name 
+                        )
             network[2].send_throttles( [ wheel_throttles[0], wheel_throttles[2] ] ) 
             network[3].send_throttles( [ wheel_throttles[3], wheel_throttles[1] ] ) 
 

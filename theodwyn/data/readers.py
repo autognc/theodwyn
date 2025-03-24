@@ -33,8 +33,11 @@ class CSVReader(FileHandler):
         super().close_file()
 
     def reset_iterator( self ):
-        if isinstance( self.file, TextIOWrapper ):
-            self.csv_reader = csv.DictReader( self.file )
+        if isinstance( self.file, TextIOWrapper ): 
+            self.file.seek(0)
+            if self.csv_reader is None:
+                self.csv_reader = csv.DictReader( self.file )
+            _ = next(self.csv_reader)
 
     def read_nextrow( self ):
         """
@@ -43,7 +46,7 @@ class CSVReader(FileHandler):
         data = None
         if self.csv_reader:
             try:
-                data = self.csv_reader.__next__()
+                data = next( self.csv_reader )
             except StopIteration:
                 data = None
         return data

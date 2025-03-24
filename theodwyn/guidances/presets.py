@@ -92,7 +92,8 @@ class Preset2DShapes( GuidanceBase ):
                 'y'     : y   ,
                 'v_x'   : v_x ,
                 'v_y'   : v_y ,
-                'yaw'   : -pi + freq * tau
+                'yaw'   : -pi + freq * tau,
+                'av_z'  : freq
             }
         elif self.shape is PRESET_RECTANGLE:
             raise NotImplementedError
