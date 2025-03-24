@@ -51,7 +51,7 @@ CAMERA_OFFSET               = np.array( [ 0. ,  0.030 ,  0.010 ] )
 TARGET_OFFSET               = np.array( [ 0. ,  0.000 ,  0.100 ] )
 
 # >> GUIDANCE PREFERENCES
-GUIDANCE_AWAIT_TIME         = 1         # NOTE: 1 Second
+GUIDANCE_AWAIT_TIME         = 10.        # NOTE: 1 Second
 
 # >> DATA RECORD PREFERENCES 
 RECORD_OBJECT_1   = "eomer_cam"
@@ -271,22 +271,26 @@ class CollectionStack(ThreadedStackBase):
                         f"Autonomous Guidance starting NOW",
                         self.process_name
                     )
-
+            
+            standby = False
             if not self.guidance_ready:
                 if self.guidance_stime is None:
                     guide = guidance.get_init_guidance()
                 else:
                     # NOTE: Robots will be sit in standby until guidance wait time has passed
                     # NOTE: This is different than when guide is None
-                    guide = {} 
+                    guide   = {} 
+                    standby = True
             else:                       
                 guide = guidance.determine_guidance()
             
-            if not guide is None:
+
+            if not guide is None and not standby:
                 if 'x' in guide and 'y' in guide     : set_points.pos_xy  = np.array( [ float(guide['x'])  , float(guide['y'])   ] ).flatten()
                 if 'v_x' in guide and 'v_y' in guide : set_points.vel_xy  = np.array( [ float(guide['v_x']), float(guide['v_y']) ] ).flatten()
                 if 'yaw' in guide                    : set_points.ang_yaw = float(guide['yaw'])
-
+                if 'av_z'in guide                    : set_points.avel_z  = float(guide['av_z'])
+                
                 pos_xy_vicon, ang_yaw_vicon = None, None
 
                 if network[4]: 
@@ -334,8 +338,8 @@ class CollectionStack(ThreadedStackBase):
                         ang_yaw_vicon   = vicon_data.orientation_euler[2]
 
                         if ( not self.guidance_ready ) and ( not set_points.ang_dpt is None ):
-                            dist_2init = norm( np.array( [ guide['x'], guide['y'] ] ) - 1E-3*np.array(vicon_data.position[0:2]), 2 ) 
-                            dang_2init = abs( wrap_to_pi( guide['yaw'] - vicon_data.orientation_euler[2] ) ) 
+                            dist_2init = norm( set_points.pos_xy - 1E-3*np.array(vicon_data.position[0:2]), 2 ) 
+                            dang_2init = abs( wrap_to_pi( set_points.ang_yaw - vicon_data.orientation_euler[2] ) ) 
                             cdang_2init= norm( set_points.ang_dpt, 2 )
                             if dist_2init < INIT_DIST_THRESHOLD and dang_2init < INIT_ANGLE_THRESHOLD and cdang_2init < INIT_CAM_ANGLE_THRESHOLD:
                                 self.guidance_stime = perf_counter()
@@ -373,7 +377,7 @@ class CollectionStack(ThreadedStackBase):
                 if not dpt_cmd is None:
                     camera_command  = [ degrees(dpt_cmd[0]), -degrees(dpt_cmd[1])  ]
             
-            else:
+            elif guide is None:
                 if guidance                         : guidance.reset_guidance()
                 if self.guidance_ready              : self.guidance_ready = False
                 if not self.guidance_stime is None  : self.guidance_stime = None

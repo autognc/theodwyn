@@ -11,6 +11,7 @@ class VFB_Setpoints:
     pos_xy  : Optional[NDArray]             = None
     vel_xy  : Optional[NDArray]             = None
     ang_yaw : Optional[Union[NDArray,int]]  = None
+    avel_z  : Optional[NDArray]             = None
     ang_dpt : Optional[NDArray]             = None
 
 
@@ -64,9 +65,12 @@ class ViconFeedback(ControllerBase):
             v_out[0]    = set_points.vel_xy[0]
             v_out[1]    = set_points.vel_xy[1]
 
+        if not set_points.avel_z is None:
+            v_out[2]    = set_points.avel_z
+
         if (not ang_yaw_vicon is None) and (not set_points.ang_yaw is None):
             a_err       = wrap_to_pi( set_points.ang_yaw - ang_yaw_vicon )
-            v_out[2]    = self.a_gain * a_err
+            v_out[2]    += self.a_gain * a_err
 
         if (not pos_xy_vicon is None) and (not set_points.pos_xy is None):
             p_err       =  set_points.pos_xy - pos_xy_vicon

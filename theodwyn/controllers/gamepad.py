@@ -14,14 +14,18 @@ class XboxGamePad(ControllerBase):
 
     process_name : str = "Xbox Controller"
     
+    _player_id   : int
+
     def __init__(
         self,
-        logger : Optional[Logger] = None,
+        player_id   : int              = 0,
+        logger      : Optional[Logger] = None,
         **config_kwargs
     ):
         super().__init__(
             logger=logger
         )
+        self._player_id = player_id
         self.load( **config_kwargs )
     
     def init_controller( self ):
@@ -30,8 +34,8 @@ class XboxGamePad(ControllerBase):
         """
         pg.init()
         pg.joystick.init()
-        if pg.joystick.get_count() > 0:
-            self.jstick = pg.joystick.Joystick(0)
+        if pg.joystick.get_count() > self._player_id:
+            self.jstick = pg.joystick.Joystick( self._player_id )
             if isinstance(self.logger,Logger): 
                 self.logger.write(
                     f'Connected to {self.jstick.get_name()}',

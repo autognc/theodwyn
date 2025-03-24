@@ -9,6 +9,7 @@ from theodwyn.networks.comm_prot                import ZMQDish
 from theodwyn.networks.vicon                    import ViconConnection
 from theodwyn.controllers.viconfeedback         import ViconFeedback
 from theodwyn.guidances.presets                 import Preset2DShapes, PRESET_CIRCLE
+from theodwyn.guidances.file_interpreters       import CSVInterpreter
 from theodwyn.stacks.collection                 import CollectionStack
 from rohan.data.classes                         import StackConfiguration
 from time import sleep 
@@ -23,13 +24,8 @@ if __name__ == "__main__":
     config.network_configs              = json_data["network"]
     config.network_configs[1]["SDA"]    = board.SDA
     config.network_configs[1]["SCL"]    = board.SCL
-    config.guidance_configs             = {
-        "shape"         : PRESET_CIRCLE,
-        "shape_params"  : {
-            "r"     : 1.0,
-            "freq"  : 2 * pi / 120
-        }
-    }
+    # config.guidance_configs             = { "shape" : PRESET_CIRCLE, "shape_params": { "r" : 1.0, "freq" : 2 * pi / 120 } }
+    config.guidance_configs             = { "csv_trajfilename" : "./trajs/trajectory_redim_t05.csv" }
     config.controller_configs["p_gain"] = 1.50 * diag([0.5,0.5])
     config.controller_configs["a_gain"] = 0.50
     config.controller_configs["c_gain"] = 0.4
@@ -37,7 +33,8 @@ if __name__ == "__main__":
     config.camera_classes               = XIMEA
     config.network_classes              = [ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,SabertoothSimpleSerial,ViconConnection]
     config.controller_classes           = ViconFeedback
-    config.guidance_classes             = Preset2DShapes
+    # config.guidance_classes             = Preset2DShapes
+    config.guidance_classes             = CSVInterpreter
     
     with CollectionStack( config=config ) as theo_stack:
         try:
