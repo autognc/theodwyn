@@ -66,7 +66,7 @@ class Preset2DShapes( GuidanceBase ):
     def get_init_guidance(self):
         if self.shape is PRESET_CIRCLE:
             return {
-                'x'     : self.shape_params['r'], 
+                'x'     : self.shape_params['c_pnt'][0] + self.shape_params['r'], 
                 'y'     : 0.,
                 'yaw'   : -pi
             }

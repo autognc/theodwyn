@@ -8,6 +8,7 @@ from theodwyn.networks.sabertooth               import SabertoothSimpleSerial
 from theodwyn.networks.adafruit                 import Adafruit_PCA9685
 from theodwyn.networks.comm_prot                import ZMQDish
 from theodwyn.networks.vicon                    import ViconConnection
+from theodwyn.networks.event_signal             import SingleEventSignal
 from theodwyn.controllers.viconfeedback         import ViconFeedback
 # from theodwyn.guidances.presets                 import Preset2DShapes, PRESET_CIRCLE
 from theodwyn.guidances.file_interpreters       import CSVInterpreter
@@ -52,7 +53,7 @@ if __name__ == "__main__":
     config.navigation_configs["proj_path"]      = f"{SAVE_DIR}/proj"
 
     config.camera_classes               = XIMEA
-    config.network_classes              = [ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,SabertoothSimpleSerial,ViconConnection]
+    config.network_classes              = [ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,SabertoothSimpleSerial,ViconConnection,SingleEventSignal]
     config.controller_classes           = ViconFeedback
     # config.guidance_classes             = Preset2DShapes
     config.guidance_classes             = CSVInterpreter

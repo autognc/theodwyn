@@ -8,7 +8,7 @@
         },
         {
             "channels" : 16,
-            "init_cmd" : [ 135.0 , 90.0 ],
+            "init_cmd" : [ 250.0 , 90.0 ],
             "actuation_range" : [ 270, 180 ], 
             "min_max_pwr" : [ [500, 2500], [500,2500] ],
             "safety_bounds" : [ null, [10,170] ]
@@ -31,6 +31,12 @@
         },
         {
             "host_addr" : "192.168.1.100"
+        },
+        {
+            "addr"  : "udp://192.168.1.48:5560",
+            "data_format" : "3f",
+            "topic" : "hsi",
+            "timeo" : 100
         }
     ],
     "camera" : {
@@ -55,7 +61,7 @@
 	    "kps_scale" : 0.05,
         "num_kps": 40,
         "meas_model": "c++",
-        "filter_dt": 0.02,
+        "filter_dt": 0.1,
         "meas_dt": 0.1,
         "process_noise_std": 0.01,
         "meas_noise_std": 0.05,

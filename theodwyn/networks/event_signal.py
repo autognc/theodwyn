@@ -17,11 +17,11 @@ class EventSignal(ZMQDish):
         logger      : Optional[Logger]  = None
     ):
         super().__init__(
-            self,
             addr        = addr,
             data_format = data_format,
             timeo       = timeo,
             topic       = topic,
+            log_timeo   = False,
             logger      = logger
         )
         self.event_flag = threading.Event()
@@ -41,7 +41,6 @@ class SingleEventSignal(EventSignal):
         logger      : Optional[Logger]  = None
     ):
         super().__init__(
-            self,
             addr        = addr,
             data_format = data_format,
             timeo       = timeo,
@@ -65,6 +64,8 @@ class SingleEventSignal(EventSignal):
                         process_name=self.process_name
                     )
                 return topic, data
+            else:
+                return None, None
         else:
             if self.logger:
                 self.logger.write(
