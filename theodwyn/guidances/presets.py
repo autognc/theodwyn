@@ -34,6 +34,8 @@ class Preset2DShapes( GuidanceBase ):
         if shape is PRESET_CIRCLE:
             if not all( key in shape_params for key in ('r','freq') ): 
                 raise KeyError
+            if 'c_pnt' not in shape_params:
+                shape_params['c_pnt'] = (0.,0.)
         elif shape is PRESET_RECTANGLE:
             raise NotImplementedError # TODO:
             if not all( key in shape_params for key in ('l','w','v') ): 
@@ -83,13 +85,14 @@ class Preset2DShapes( GuidanceBase ):
             tau     = perf_counter() - self.traj_start_time
             r       = self.shape_params['r']
             freq    = self.shape_params['freq']
+            c_pnt   = self.shape_params['c_pnt']
             x       = r *         cos( freq * tau )
             y       = r *         sin( freq * tau )
             v_x     = r * freq * -sin( freq * tau )
             v_y     = r * freq *  cos( freq * tau )
             return {
-                'x'     : x   , 
-                'y'     : y   ,
+                'x'     : c_pnt[0] + x   , 
+                'y'     : c_pnt[1] + y   ,
                 'v_x'   : v_x ,
                 'v_y'   : v_y ,
                 'yaw'   : -pi + freq * tau,

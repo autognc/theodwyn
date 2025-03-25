@@ -6,8 +6,8 @@ import cv2                              as cv
 from copy                               import copy
 from typing                             import TypeVar, Optional, Tuple, Dict, List
 from numpy.typing                       import NDArray
-from time                               import perf_counter
-
+from time                               import perf_counter, sleep
+from queue                              import Queue
 
 # Manually Installed Package Imports
 from rohan.common.base_navigations      import ThreadedNavigationBase
@@ -55,6 +55,11 @@ from theodwyn.navigations.mekf_ppt      import MEKF_ppt_Dynamics
 #                 set, command, vicon_data = self.processing_queue.get()
 #                 csv_writer.write_data( [set, *command, *vicon_data[0], *vicon_data[1] ] )
 #             sleep(1)
+
+MAX_CSV_SAVING_QUEUE    = 1000
+CSV_EST_ID              = '0'
+CSV_MEAS_ID             = '1'
+CSV_INF_ID              = '2'
 
 est_csv_headers     = [
                         'timestamp'
@@ -160,6 +165,7 @@ class MEKF(ThreadedNavigationBase):
     est_csvw                : Optional[CSVWriter]   = None
     meas_csvw               : Optional[CSVWriter]   = None
     inf_csvw                : Optional[CSVWriter]   = None
+    csv_svaing_queue        : Queue
 
     def __init__(
         self,
@@ -198,7 +204,7 @@ class MEKF(ThreadedNavigationBase):
         rnd_dig             : int                   = 3, # round digits 
         skpped_count        : int                   = 0,
         source_mode         : str                   = "camera",
-        proj_path           : Optional[str]         = "",
+        proj_path           : Optional[str]         = None,
         image_dir           : Optional[str]         = None,
         est_csv_fn          : Optional[str]         = None,
         meas_csv_fn         : Optional[str]         = None,
@@ -279,9 +285,12 @@ class MEKF(ThreadedNavigationBase):
             self.logger.write(f"MEKF ThreadedNavigationBase Class Initialized", process_name = self.process_name)
 
         # >>> CSV Writers
-        if est_csv_fn   : self.est_csvw   = CSVWriter(filename = est_csv_fn, fieldnames = est_csv_headers)
-        if meas_csv_fn  : self.meas_csvw  = CSVWriter(filename = meas_csv_fn, fieldnames = meas_csv_headers)
-        if infer_csv_fn : self.inf_csvw   = CSVWriter(filename = infer_csv_fn, fieldnames = infer_csv_headers)
+        if est_csv_fn or meas_csv_fn or infer_csv_fn:
+            if est_csv_fn   : self.est_csvw   = CSVWriter(filename = est_csv_fn, fieldnames = est_csv_headers)
+            if meas_csv_fn  : self.meas_csvw  = CSVWriter(filename = meas_csv_fn, fieldnames = meas_csv_headers)
+            if infer_csv_fn : self.inf_csvw   = CSVWriter(filename = infer_csv_fn, fieldnames = infer_csv_headers)
+            self.csv_saving_queue   = Queue(maxsize=MAX_CSV_SAVING_QUEUE)
+            self.add_threaded_method( target=self.csv_saving )
 
         if self.logger  : self.logger.write(f"CSV logging to {est_csv_fn}, {meas_csv_fn}, and {infer_csv_fn} initialized", process_name = self.process_name)
         
@@ -333,7 +342,27 @@ class MEKF(ThreadedNavigationBase):
         if self.inf_csvw:
             self.inf_csvw.close_file()
             if self.logger: self.logger.write(f"MEKF Inference CSV Closed", process_name = self.process_name)
-        
+    
+
+    def csv_saving(self):
+        while not self.sigterm.is_set():
+            while not self.csv_saving_queue.empty():
+                csv_id, data = self.csv_saving_queue.get()
+                if csv_id is CSV_EST_ID:
+                    if self.est_csvw  : self.est_csvw.write_data(data=data)
+                elif csv_id is CSV_MEAS_ID:
+                    if self.meas_csvw : self.meas_csvw.write_data(data=data)
+                elif csv_id is CSV_INF_ID:
+                    if self.inf_csvw  : self.inf_csvw.write_data(data=data)
+                else:
+                    if self.logger:
+                        self.logger.write(
+                            "CSV ID provided -> {csv_id}, is not a known identifier. Continuing ...",
+                            process_name=self.process_name
+                        )
+            sleep(1) # >>> Let go of resources for a little if nothing is going on
+
+
 
     def spin_meas_model( self ) -> None:
         """
@@ -442,21 +471,25 @@ class MEKF(ThreadedNavigationBase):
                         self.logger.write(f"Frame Inference Accepted on {frame_id}", process_name = self.process_name)
                         self.logger.write(inf_str, process_name = self.process_name)
                     if self.inf_csvw : 
-                        self.inf_csvw.write_data({
-                                                    'timestamp' : perf_counter()
-                                                    , 'img_id'  : "image_" + str(frame_id).zfill(5)
-                                                    , 'img_input_h_pix': img_input_h
-                                                    , 'img_input_w_pix': img_input_w
-                                                    , 'img_inf_h_pix': img_inf_h
-                                                    , 'img_inf_w_pix': img_inf_w
-                                                    , 'box'     : np.round(ort_box_m).tolist()
-                                                    , 'score'   : ort_sco_m
-                                                    , 'labels'  : ort_output_dict[self.label_key]
-                                                    , 'keypoints': ort_kps_2D_int.tolist()
-                                                    , 'az_el_radians' : inf_az_el.tolist()
-                                                })
-                    # if hasattr(self.inf_csvw, 'file') and self.inf_csvw.file:
-                    #     self.inf_csvw.file.flush()  # flush the file to ensure that the data is written to disk
+                        self.csv_saving_queue.put( 
+                            (
+                                CSV_INF_ID, 
+                                {
+                                    'timestamp' : perf_counter()
+                                    , 'img_id'  : "image_" + str(frame_id).zfill(5)
+                                    , 'img_input_h_pix': img_input_h
+                                    , 'img_input_w_pix': img_input_w
+                                    , 'img_inf_h_pix': img_inf_h
+                                    , 'img_inf_w_pix': img_inf_w
+                                    , 'box'     : np.round(ort_box_m).tolist()
+                                    , 'score'   : ort_sco_m
+                                    , 'labels'  : ort_output_dict[self.label_key]
+                                    , 'keypoints': ort_kps_2D_int.tolist()
+                                    , 'az_el_radians' : inf_az_el.tolist()
+                                }
+                            ) 
+                        )
+                        
                     if not self.first_meas_proc.is_set():
                         # if the first measurement is not set and the measurement is not ready, set the first measurement
                         self.is_first_meas.set()
@@ -493,13 +526,21 @@ class MEKF(ThreadedNavigationBase):
                     self.is_first_meas.clear()
                     if self.logger:
                         self.logger.write(f"Filter initialized with {self.frame_id} image", process_name = self.process_name)
-                    if self.est_csvw : self.est_csvw.write_data( build_est_dict(perf_counter(), -1, self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
-                    # if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
-                    #     # flush the file to ensure that the data is written to disk
-                    #     self.est_csvw.file.flush()
-                    if self.meas_csvw : self.meas_csvw.write_data( build_meas_dict(perf_counter(), posi0, quat0, start_R) )
-                    # if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
-                    #     self.meas_csvw.file.flush()
+                    
+                    if self.est_csvw : 
+                        self.csv_saving_queue.put( 
+                            (
+                                CSV_EST_ID, 
+                                build_est_dict(perf_counter(), -1, self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est)
+                            ) 
+                        )
+                    if self.meas_csvw : 
+                        self.csv_saving_queue.put( 
+                            (
+                                CSV_MEAS_ID, 
+                                build_meas_dict(perf_counter(), posi0, quat0, start_R)
+                            ) 
+                        )
 
                 # continue to next iteration if first measurement is set 
                 continue 
@@ -529,16 +570,24 @@ class MEKF(ThreadedNavigationBase):
                                         # f"Most Recent Time Update Start & End: {time_update_start}, {time_update_end},"
                                         # f"Most Recent Measurement Update Start & End: {meas_update_started}, {meas_update_ended}", 
                                         , process_name = self.process_name)
-                if self.meas_csvw : self.meas_csvw.write_data( build_meas_dict(perf_counter(), posiJ, quatJ, covarJ) )
-                # if hasattr(self.meas_csvw, 'file') and self.meas_csvw.file:
-                #     self.meas_csvw.file.flush()
+                if self.meas_csvw : 
+                    self.csv_saving_queue.put( 
+                        (
+                            CSV_MEAS_ID, 
+                            build_meas_dict(perf_counter(), posiJ, quatJ, covarJ)
+                        ) 
+                    )
                 self.meas_ready.clear()  
             
             # record filter estimate
             # in this case, is always false since we clear it after measurement update
-            if self.est_csvw: self.est_csvw.write_data( build_est_dict(perf_counter(), self.meas_ready.is_set(), self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est) )
-            # if hasattr(self.est_csvw, 'file') and self.est_csvw.file:
-            #     self.est_csvw.file.flush()
+            if self.est_csvw : 
+                self.csv_saving_queue.put( 
+                    (
+                        CSV_EST_ID, 
+                        build_est_dict(perf_counter(), self.meas_ready.is_set(), self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est)
+                    ) 
+                )
 
             #####################################TODO: check this
             pass 
