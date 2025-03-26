@@ -438,6 +438,8 @@ class MEKF(ThreadedNavigationBase):
                         except Exception as e:
                             print(e)
                             tr_pnp, q_pnp   = PnP.pnp_solve(kps_3D = self.kps3D, kps_2D = ort_kps_2D, camera_matrix = Kmat_inf)
+                        self.pnp_tr = tr_pnp
+                        self.pnp_q  = q_pnp
                         ort_kps_2D  = Projection.project_keypoints(q = q_pnp, r = tr_pnp, K = Kmat_inf, keypoints = self.kps3D)    
                     # calculate azimuth and elevation and store in self
                     inf_az_el, _    = Bearing.compute_azimuth_elevation(ort_kps_2D, Kmat_inf)
@@ -560,7 +562,11 @@ class MEKF(ThreadedNavigationBase):
                 poseJ, covarJ   = self.meas_fcn(pose_est, self.meas_az_el, self.kps3D, self.bearing_std, self.cam_offset)
                 posiJ, quatJ    = poseJ[:3], poseJ[3:]
                 meas_update_started = perf_counter()
-                self.mekf.measurement_update(quatJ, posiJ, covarJ)
+                if self.pnp_flag:
+                    self.mekf.measurement_update(copy(self.pnp_q), copy(self.pnp_tr), covarJ)
+                else:
+                    self.mekf.measurement_update(quatJ, posiJ, covarJ)
+ 
                 meas_update_ended   = perf_counter()
                 self.mekf.mekf_reset()
                 if self.logger:

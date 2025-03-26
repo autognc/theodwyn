@@ -1,6 +1,7 @@
 {
     "navigation": {
         "kps3D_path": "../theodwyn/navigations/soho_128.npy",
+        "kps_scale": 1, 
         "num_kps": 40,
         "model_path": "/home/saa4743/agnc_repos/krcnn_model_exports/test_010_soho_40kps/dropout_custom_krcnn_mbnv3_fpn_v2_last_epoch_test_010_soho_40kps.onnx",
         "meas_model": "c++",
