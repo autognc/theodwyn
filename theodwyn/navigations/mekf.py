@@ -24,8 +24,6 @@ from theodwyn.navigations.pose_utils    import Projection
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt
 from theodwyn.navigations.mekf_ppt      import MEKF_ppt_Dynamics
 
-# TODO: Move CSV Writing to its own thread with appropriate queuing
-
 # import pdb
 # import traceback
 
@@ -57,9 +55,18 @@ from theodwyn.navigations.mekf_ppt      import MEKF_ppt_Dynamics
 #             sleep(1)
 
 MAX_CSV_SAVING_QUEUE    = 1000
+MAX_PROJ_SAVING_QUEUE   = 100
 CSV_EST_ID              = '0'
 CSV_MEAS_ID             = '1'
 CSV_INF_ID              = '2'
+
+ONNX_WARMUPS            = 10
+
+# project inferences if projection path is set
+INF_PROJ_COLOR_BGR      = (0, 0, 255) # red
+PNP_PROJ_COLOR_BGR      = (57, 21, 57) # deep purple 
+NLS_PROJ_COLOR_BGR      = (128, 0, 128) # purple
+ORIGIN_PROJ_COLOR_BGR   = (255, 255, 255) # white
 
 est_csv_headers     = [
                         'timestamp'
@@ -165,7 +172,8 @@ class MEKF(ThreadedNavigationBase):
     est_csvw                : Optional[CSVWriter]   = None
     meas_csvw               : Optional[CSVWriter]   = None
     inf_csvw                : Optional[CSVWriter]   = None
-    csv_svaing_queue        : Queue
+    csv_saving_queue        : Optional[Queue]       = None
+    proj_saving_queue       : Optional[Queue]       = None 
 
     def __init__(
         self,
@@ -255,22 +263,16 @@ class MEKF(ThreadedNavigationBase):
         
         self.skipped    = skpped_count
         if proj_path is not None and proj_path != "":
-            self.proj           = True
+            self.proj               = True
+            self.proj_saving_queue  = Queue(maxsize=MAX_PROJ_SAVING_QUEUE) 
         else:
             self.proj           = False
         self.proj_path          = proj_path 
-        self.proj_inf_img_bgr   = None
-        self.proj_inf_bbox      = None
-        self.proj_inf_kps_2D    = None
-        self.proj_nls_kps_2D    = None
-        self.proj_pnp_kps_2D    = None
-        self.proj_img_idx       = None
 
         # thread.Event() works as follows: on -> .set() | off -> .clear() | check -> .is_set()
         self.is_first_meas      = threading.Event() # flag for first measurement
         self.first_meas_proc    = threading.Event() # whether the first measurement has been processed
         self.meas_ready         = threading.Event() # flag for measurement ready
-        self.proj_ready         = threading.Event() # flag for projection ready
 
         self.mekf_prop_timer    = IntervalTimer( interval = self.mekf_dt )
         self.mekf_meas_timer    = IntervalTimer( interval = self.meas_dt) 
@@ -324,6 +326,29 @@ class MEKF(ThreadedNavigationBase):
         # start_pose, start_covar = MEKF_ppt_Dynamics.nls_cpp(pose0, azel, kps_3D, bearing_meas_std_rad, tr_co2cam_cbff)
 
 
+        if self.logger:
+            self.logger.write(
+                "Warming up onnxruntime inference. Please wait ... ",
+                process_name=self.process_name
+            )
+            warm_up_s = perf_counter()
+
+        for _ in range(ONNX_WARMUPS):
+            _ = iut.ort_krcnn_inference(
+                self.model, 
+                self.minput_names, 
+                self.moutput_names, 
+                np.zeros( (3,*self.img_in_size) , dtype=np.float32 ), 
+                output_keys = self.outkeys
+            ) 
+
+        if self.logger:
+            warm_up_e = perf_counter()
+            self.logger.write(
+                f"Warmup for onnxruntime inference was completed ({warm_up_e-warm_up_s} s)",
+                process_name=self.process_name
+            )
+
         # open files and write the header
         if self.est_csvw    : self.est_csvw.open_file()
         if self.meas_csvw   : self.meas_csvw.open_file()
@@ -342,26 +367,6 @@ class MEKF(ThreadedNavigationBase):
         if self.inf_csvw:
             self.inf_csvw.close_file()
             if self.logger: self.logger.write(f"MEKF Inference CSV Closed", process_name = self.process_name)
-    
-
-    def csv_saving(self):
-        while not self.sigterm.is_set():
-            while not self.csv_saving_queue.empty():
-                csv_id, data = self.csv_saving_queue.get()
-                if csv_id is CSV_EST_ID:
-                    if self.est_csvw  : self.est_csvw.write_data(data=data)
-                elif csv_id is CSV_MEAS_ID:
-                    if self.meas_csvw : self.meas_csvw.write_data(data=data)
-                elif csv_id is CSV_INF_ID:
-                    if self.inf_csvw  : self.inf_csvw.write_data(data=data)
-                else:
-                    if self.logger:
-                        self.logger.write(
-                            "CSV ID provided -> {csv_id}, is not a known identifier. Continuing ...",
-                            process_name=self.process_name
-                        )
-            sleep(1) # >>> Let go of resources for a little if nothing is going on
-
 
 
     def spin_meas_model( self ) -> None:
@@ -436,7 +441,11 @@ class MEKF(ThreadedNavigationBase):
                         try:
                             tr_pnp, q_pnp, _= PnP.ransac_pnp_solve(kps_3D = self.kps3D, kps_2D = ort_kps_2D, camera_matrix = Kmat_inf)
                         except Exception as e:
-                            print(e)
+                            if self.logger:
+                                self.logger.write(
+                                    "PNP failed with the following exception: {e}",
+                                    process_name=self.process_name
+                                )
                             tr_pnp, q_pnp   = PnP.pnp_solve(kps_3D = self.kps3D, kps_2D = ort_kps_2D, camera_matrix = Kmat_inf)
                         self.pnp_tr = tr_pnp
                         self.pnp_q  = q_pnp
@@ -444,35 +453,47 @@ class MEKF(ThreadedNavigationBase):
                     # calculate azimuth and elevation and store in self
                     inf_az_el, _    = Bearing.compute_azimuth_elevation(ort_kps_2D, Kmat_inf)
                     self.meas_az_el = inf_az_el
+
                     if self.proj:
-                        self.proj_ready.set()
-                        self.proj_inf_bbox      = ort_box_m
-                        self.proj_inf_kps_2D    = ort_kps_2D
-                        self.proj_inf_img_bgr   = img_bgr_proj
-                        self.proj_img_idx       = copy(self.frame_id)
-                        pose_proj, _            = self.meas_fcn(pose_est, self.meas_az_el, self.kps3D, self.bearing_std, self.cam_offset)
-                        q_proj, tr_proj         = pose_proj[3:], pose_proj[:3]
+                        proj_inf_bbox      = ort_box_m
+                        proj_inf_kps_2D    = ort_kps_2D
+                        proj_inf_img_bgr   = img_bgr_proj
+                        proj_img_idx       = copy(self.frame_id)
+                        pose_proj, _       = self.meas_fcn(pose_est, self.meas_az_el, self.kps3D, self.bearing_std, self.cam_offset)
+                        q_proj, tr_proj    = pose_proj[3:], pose_proj[:3]
                         # project 3D keypoints to 2D
-                        self.proj_nls_kps_2D    = Projection.project_keypoints(
-                                                                                q = q_proj
-                                                                                , r = tr_proj
-                                                                                , K = Kmat_inf
-                                                                                , keypoints = self.kps3D_orig
-                                                                                )
+                        proj_nls_kps_2D    = Projection.project_keypoints(
+                                                                            q = q_proj
+                                                                            , r = tr_proj
+                                                                            , K = Kmat_inf
+                                                                            , keypoints = self.kps3D_orig
+                                                                            )
+                        
+                        proj_pnp_kps_2D = None
                         if self.pnp_flag:
-                            self.proj_pnp_kps_2D= Projection.project_keypoints(
+                                proj_pnp_kps_2D= Projection.project_keypoints(
                                                                                 q = q_pnp
                                                                                 , r = tr_pnp
                                                                                 , K = Kmat_inf
                                                                                 , keypoints = self.kps3D_orig
                                                                                 )
- 
- 
+                        if self.proj_saving_queue:
+                            self.proj_saving_queue.put(
+                                (
+                                    proj_inf_img_bgr, 
+                                    proj_inf_bbox, 
+                                    proj_inf_kps_2D, 
+                                    proj_nls_kps_2D, 
+                                    proj_pnp_kps_2D, 
+                                    proj_img_idx
+                                )
+                            )
+    
 
                     if self.logger:
                         self.logger.write(f"Frame Inference Accepted on {frame_id}", process_name = self.process_name)
                         self.logger.write(inf_str, process_name = self.process_name)
-                    if self.inf_csvw : 
+                    if self.inf_csvw and self.csv_saving_queue: 
                         self.csv_saving_queue.put( 
                             (
                                 CSV_INF_ID, 
@@ -529,14 +550,14 @@ class MEKF(ThreadedNavigationBase):
                     if self.logger:
                         self.logger.write(f"Filter initialized with {self.frame_id} image", process_name = self.process_name)
                     
-                    if self.est_csvw : 
+                    if self.est_csvw and self.csv_saving_queue: 
                         self.csv_saving_queue.put( 
                             (
                                 CSV_EST_ID, 
                                 build_est_dict(perf_counter(), -1, self.mekf.state_est, self.mekf.global_quat_est, self.mekf.covar_est)
                             ) 
                         )
-                    if self.meas_csvw : 
+                    if self.meas_csvw and self.csv_saving_queue: 
                         self.csv_saving_queue.put( 
                             (
                                 CSV_MEAS_ID, 
@@ -576,7 +597,7 @@ class MEKF(ThreadedNavigationBase):
                                         # f"Most Recent Time Update Start & End: {time_update_start}, {time_update_end},"
                                         # f"Most Recent Measurement Update Start & End: {meas_update_started}, {meas_update_ended}", 
                                         , process_name = self.process_name)
-                if self.meas_csvw : 
+                if self.meas_csvw and self.csv_saving_queue: 
                     self.csv_saving_queue.put( 
                         (
                             CSV_MEAS_ID, 
@@ -587,7 +608,7 @@ class MEKF(ThreadedNavigationBase):
             
             # record filter estimate
             # in this case, is always false since we clear it after measurement update
-            if self.est_csvw : 
+            if self.est_csvw and self.csv_saving_queue: 
                 self.csv_saving_queue.put( 
                     (
                         CSV_EST_ID, 
@@ -595,73 +616,83 @@ class MEKF(ThreadedNavigationBase):
                     ) 
                 )
 
-            #####################################TODO: check this
-            pass 
-    
+            #####################################TODO: check this    
+
+    def csv_saving(self):
+        if self.csv_saving_queue:
+            while not self.sigterm.is_set():
+                while not self.csv_saving_queue.empty():
+                    csv_id, data = self.csv_saving_queue.get()
+                    if csv_id is CSV_EST_ID:
+                        if self.est_csvw  : self.est_csvw.write_data(data=data)
+                    elif csv_id is CSV_MEAS_ID:
+                        if self.meas_csvw : self.meas_csvw.write_data(data=data)
+                    elif csv_id is CSV_INF_ID:
+                        if self.inf_csvw  : self.inf_csvw.write_data(data=data)
+                    else:
+                        if self.logger:
+                            self.logger.write(
+                                "CSV ID provided -> {csv_id}, is not a known identifier. Continuing ...",
+                                process_name=self.process_name
+                            )
+                sleep(1) # >>> Let go of resources for a little if nothing is going on
+
+
     def spin_projection(self) -> None:
         """
         Threaded Process: Projects 3D keypoints to 2D
         """
-        while not self.sigterm.is_set():
-            if self.proj and self.proj_ready.is_set():
-                # project inferences if projection path is set
-                inf_proj_color_bgr      = (0, 0, 255) # red
-                pnp_proj_color_bgr      = (57, 21, 57) # deep purple 
-                nls_proj_color_bgr      = (128, 0, 128) # purple
-                origin_proj_color_bgr   = (255, 255, 255) # white
+        
+        if self.proj_saving_queue and self.proj:
+            while not self.sigterm.is_set():
+                while not self.proj_saving_queue.empty():
+                    
+                    proj_inf_img_bgr, proj_inf_bbox, proj_inf_kps_2D, proj_nls_kps_2D, proj_pnp_kps_2D, proj_img_idx = self.proj_saving_queue.get()
 
-                proj_inf_bbox_kps       = Projection.project_bbox_kps_array_2cv2np(
-                                                                                    self.proj_inf_img_bgr
-                                                                                    , box = self.proj_inf_bbox
-                                                                                    , keypoints = self.proj_inf_kps_2D
-                                                                                    , keypoint_color = inf_proj_color_bgr
-                                                                                    , circle_thickness = -1
-                                                                                    , circle_size = 2
-                                                                                )
-                add_nls_kps             = Projection.project_bbox_kps_array_2cv2np(
-                                                                                    proj_inf_bbox_kps
-                                                                                    , box = None 
-                                                                                    , keypoints = self.proj_nls_kps_2D
-                                                                                    , keypoint_color = nls_proj_color_bgr
-                                                                                    , circle_thickness = 2
-                                                                                    , circle_size = 6
-                                                                                    , origin_color = origin_proj_color_bgr
-                                                                                    , origin_flag = True 
-                                                                                    , origin_size = 3
-                                                                                    , origin_thickness = -1
-                                                                                )
-                img_nls_fn              = f"{self.proj_path}/inf_nls_proj_image_{self.proj_img_idx}.png" 
-                cv.imwrite(img_nls_fn, add_nls_kps)
-                if self.logger:
-                    self.logger.write(f"Projected Inference and NLS Keypoints to {img_nls_fn}", process_name = self.process_name)
-
-                if self.pnp_flag:
-                    add_pnp_kps             = Projection.project_bbox_kps_array_2cv2np(
-                                                                                        proj_inf_bbox_kps.copy()
+                    proj_inf_bbox_kps       = Projection.project_bbox_kps_array_2cv2np(
+                                                                                        proj_inf_img_bgr
+                                                                                        , box = proj_inf_bbox
+                                                                                        , keypoints = proj_inf_kps_2D
+                                                                                        , keypoint_color = INF_PROJ_COLOR_BGR
+                                                                                        , circle_thickness = -1
+                                                                                        , circle_size = 2
+                                                                                    )
+                    add_nls_kps             = Projection.project_bbox_kps_array_2cv2np(
+                                                                                        proj_inf_bbox_kps
                                                                                         , box = None 
-                                                                                        , keypoints = self.proj_pnp_kps_2D
-                                                                                        , keypoint_color = pnp_proj_color_bgr
+                                                                                        , keypoints = proj_nls_kps_2D
+                                                                                        , keypoint_color = NLS_PROJ_COLOR_BGR
                                                                                         , circle_thickness = 2
                                                                                         , circle_size = 6
-                                                                                        , origin_color = origin_proj_color_bgr
+                                                                                        , origin_color = ORIGIN_PROJ_COLOR_BGR
                                                                                         , origin_flag = True 
                                                                                         , origin_size = 3
                                                                                         , origin_thickness = -1
                                                                                     )
-                    img_pnp_fn              = f"{self.proj_path}/inf_pnp_proj_image_{self.proj_img_idx}.png"
-                    cv.imwrite(img_pnp_fn, add_pnp_kps)
+                    img_nls_fn              = f"{self.proj_path}/inf_nls_proj_image_{proj_img_idx}.png" 
+                    cv.imwrite(img_nls_fn, add_nls_kps)
                     if self.logger:
-                        self.logger.write(f"Projected PNP Keypoints to {img_pnp_fn}", process_name = self.process_name)
-                                                    
-                self.proj_inf_img_bgr   = None
-                self.proj_inf_bbox      = None
-                self.proj_inf_kps_2D    = None
-                self.proj_nls_kps_2D    = None
-                self.proj_pnp_kps_2D    = None
-                self.proj_img_idx       = None
-                self.proj_ready.clear()
-                pass
+                        self.logger.write(f"Projected Inference and NLS Keypoints to {img_nls_fn}", process_name = self.process_name)
 
+                    if self.pnp_flag and (not proj_pnp_kps_2D is None):
+                        add_pnp_kps             = Projection.project_bbox_kps_array_2cv2np(
+                                                                                            proj_inf_bbox_kps.copy()
+                                                                                            , box = None 
+                                                                                            , keypoints = proj_pnp_kps_2D
+                                                                                            , keypoint_color = PNP_PROJ_COLOR_BGR
+                                                                                            , circle_thickness = 2
+                                                                                            , circle_size = 6
+                                                                                            , origin_color = ORIGIN_PROJ_COLOR_BGR
+                                                                                            , origin_flag = True 
+                                                                                            , origin_size = 3
+                                                                                            , origin_thickness = -1
+                                                                                        )
+                        img_pnp_fn              = f"{self.proj_path}/inf_pnp_proj_image_{proj_img_idx}.png"
+                        cv.imwrite(img_pnp_fn, add_pnp_kps)
+                        if self.logger:
+                            self.logger.write(f"Projected PNP Keypoints to {img_pnp_fn}", process_name = self.process_name)
+
+                sleep(1) # >>> Let go of resources for a little if nothing is going on
 
     def pass_in_frame( 
         self,

@@ -1,3 +1,4 @@
+import shutil
 import os
 import board
 import json
@@ -16,6 +17,7 @@ from theodwyn.navigations.mekf                  import MEKF
 from theodwyn.stacks.eomer                      import EomerStack
 from rohan.data.classes                         import StackConfiguration
 from time import sleep, strftime
+DEBUGGING   = True
 
 if __name__ == "__main__":
     TIME_AR             = strftime('%Y_%m_%d_%H_%M_%S')
@@ -29,6 +31,10 @@ if __name__ == "__main__":
     if not os.path.exists(f"{IMAGE_FOLDER}"): os.makedirs( f"{IMAGE_FOLDER}" ,exist_ok=True )
     if not os.path.exists(f"{VICON_FOLDER}"): os.makedirs( f"{VICON_FOLDER}" ,exist_ok=True )
     if not os.path.exists(f"{SAVE_DIR}/proj"): os.makedirs( f"{SAVE_DIR}/proj" ,exist_ok=True )
+
+    if DEBUGGING:
+        shutil.copyfile( "./config/eomer.json", f"{SAVE_DIR}/eomer.json" )
+        shutil.copyfile( "../theodwyn/navigations/mekf.py", f"{SAVE_DIR}/mekf.py" )
 
     with open("./config/eomer.json") as file:
         json_data = json.load(file)

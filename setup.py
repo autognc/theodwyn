@@ -31,6 +31,8 @@ setup(
         "numpy", 
         "pygame",
         "adafruit-circuitpython-servokit",
+        "pyserial",
+        "opencv-python"
     ],
     extras_require={
         "tests": [

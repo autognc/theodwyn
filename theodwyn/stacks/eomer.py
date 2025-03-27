@@ -28,7 +28,7 @@ from copy                                       import deepcopy
 SQRT2O2                 = sqrt(2)/2
 DEBUGGING               = False
 SINGLE_RUN              = True
-HSI_INLOOP              = True
+HSI_INLOOP              = False
 
 # TODO: PARSE THE FOLLOWING SETTINGS
 # >> CALIBRATED MOTOR CONSTANTS
@@ -387,17 +387,19 @@ class EomerStack(ThreadedStackBase):
                         pos_xy_vicon    = 1E-3*np.array(vicon_data.position[0:2]).flatten()
                         ang_yaw_vicon   = vicon_data.orientation_euler[2]
 
-                        if self.guidance_standby is GSB_NOT:
+                        if ( self.guidance_standby is GSB_NOT ) and ( not self.guidance_ready ):
                             dist_2init = norm( set_points.pos_xy - 1E-3*np.array(vicon_data.position[0:2]), 2 ) 
                             dang_2init = abs( wrap_to_pi( set_points.ang_yaw - vicon_data.orientation_euler[2] ) ) 
                             if dist_2init < INIT_DIST_THRESHOLD and dang_2init < INIT_ANGLE_THRESHOLD: 
-                                if HSI_INLOOP   : self.guidance_standby   = GSB_WAIT_HSI
-                                else            : self.guidance_standby   = GSB_WAIT_ALGN
-                                if logger:
-                                    logger.write(
-                                        f"Autonomous Guidance is now waiting for HSI",
-                                        self.process_name
-                                    )
+                                if HSI_INLOOP: 
+                                    self.guidance_standby = GSB_WAIT_HSI
+                                    if logger:
+                                        logger.write(
+                                            f"Autonomous Guidance is now waiting for HSI",
+                                            self.process_name
+                                        )
+                                else: 
+                                    self.guidance_standby = GSB_WAIT_ALGN
 
                         if not self.logged_startframe: 
                             self.logged_startframe = True    
