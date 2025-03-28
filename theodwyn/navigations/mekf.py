@@ -416,13 +416,18 @@ class MEKF(ThreadedNavigationBase):
                 
                 infer_start             = perf_counter()
                 # infer on frame
-                ort_output_dict         = iut.ort_krcnn_inference(self.model, self.minput_names, self.moutput_names, img_rgb_inf, output_keys = self.outkeys) 
+                ort_output_dict         = iut.ort_krcnn_inference(self.model, self.minput_names, self.moutput_names, img_rgb_inf, output_keys = self.outkeys)
                 
                 infer_end               = perf_counter()
                 infer_time              = infer_end - infer_start
                 if self.logger:
                     self.logger.write(f"Inferenced in {infer_time} seconds on Frame ID {frame_id}", process_name = self.process_name)
-                
+                ort_sco_max_idx = np.max(ort_output_dict[self.score_key])
+                if ort_sco_max_idx < 0.9 and not self.first_meas_proc.is_set():
+                    if self.logger:
+                        self.logger.write(f"Frame Inference Rejected on {frame_id}", process_name = self.process_name)
+                    self.frame_in   = None
+                    continue
                 # measurement loop
                 try:
                     # get highest score box prediction, index corresponding box, keypoints, and labels
@@ -669,7 +674,7 @@ class MEKF(ThreadedNavigationBase):
                                                                                         , origin_size = 3
                                                                                         , origin_thickness = -1
                                                                                     )
-                    img_nls_fn              = f"{self.proj_path}/inf_nls_proj_image_{proj_img_idx}.png" 
+                    img_nls_fn              = f"{self.proj_path}/inf_image_{proj_img_idx}_nls_proj.png" 
                     cv.imwrite(img_nls_fn, add_nls_kps)
                     if self.logger:
                         self.logger.write(f"Projected Inference and NLS Keypoints to {img_nls_fn}", process_name = self.process_name)
@@ -687,7 +692,7 @@ class MEKF(ThreadedNavigationBase):
                                                                                             , origin_size = 3
                                                                                             , origin_thickness = -1
                                                                                         )
-                        img_pnp_fn              = f"{self.proj_path}/inf_pnp_proj_image_{proj_img_idx}.png"
+                        img_pnp_fn              = f"{self.proj_path}/inf_image_{proj_img_idx}_pnp_proj.png"
                         cv.imwrite(img_pnp_fn, add_pnp_kps)
                         if self.logger:
                             self.logger.write(f"Projected PNP Keypoints to {img_pnp_fn}", process_name = self.process_name)
