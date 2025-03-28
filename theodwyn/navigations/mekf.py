@@ -456,7 +456,7 @@ class MEKF(ThreadedNavigationBase):
 
                     if self.proj:
                         proj_inf_bbox      = ort_box_m
-                        proj_inf_kps_2D    = ort_kps_2D
+                        proj_inf_kps_2D    = ort_kps_2D_int
                         proj_inf_img_bgr   = img_bgr_proj
                         proj_img_idx       = copy(self.frame_id)
                         pose_proj, _       = self.meas_fcn(pose_est, self.meas_az_el, self.kps3D, self.bearing_std, self.cam_offset)
