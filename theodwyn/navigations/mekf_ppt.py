@@ -428,22 +428,22 @@ class MEKF_ppt:
         dangle_deg          = np.degrees(dangle_rad)
 
         # robustness logic, whether to reject measurement or not 
-        if np.abs(mean_attitude_inn) > 3.0 * attiude_inn_std:
-            print(f'Rejected measurement due to attitude innovation: | {np.degrees(mean_attitude_inn)} | > 3 * {np.degrees(attiude_inn_std)}')
-        elif abs(dangle_deg) > self.max_flip:
-            print(f'Rejected measurement due to attitude flip: | {dangle_deg} | > {self.max_flip}')
-        elif np.abs(mean_position_inn) > 3.0 * position_inn_std:
-            print(f'Rejected measurement due to position innovation: | {mean_position_inn} | > 3 * {position_inn_std}')
-        else:
-            state_est_kp1   = state_est_bar_kp1 + delta_x
+        # if np.abs(mean_attitude_inn) > 3.0 * attiude_inn_std:
+        #     print(f'Rejected measurement due to attitude innovation: | {np.degrees(mean_attitude_inn)} | > 3 * {np.degrees(attiude_inn_std)}')
+        # elif abs(dangle_deg) > self.max_flip:
+        #     print(f'Rejected measurement due to attitude flip: | {dangle_deg} | > {self.max_flip}')
+        # elif np.abs(mean_position_inn) > 3.0 * position_inn_std:
+        #     print(f'Rejected measurement due to position innovation: | {mean_position_inn} | > 3 * {position_inn_std}')
+        # else:
+        state_est_kp1   = state_est_bar_kp1 + delta_x
 
-            # update object states
-            self.position_est           = np.array([state_est_kp1[self.idx_pos_x], state_est_kp1[self.idx_pos_y], state_est_kp1[self.idx_pos_z]])# position_est_bar_kp1
-            self.omega_est              = state_est_kp1[self.oidx] # omega_est_bar_kp1
-            self.global_quat_est        = quat_est_kp1 # global quaternion estimate after discrete-time propagation
-            self.state_est              = state_est_kp1 # update state estimate after discrete-time propagation, exclude delta Gibbs state
-            self.covar_est              = P_kp1 # covariance estimate
-            self.processed_meas         = True
+        # update object states
+        self.position_est           = np.array([state_est_kp1[self.idx_pos_x], state_est_kp1[self.idx_pos_y], state_est_kp1[self.idx_pos_z]])# position_est_bar_kp1
+        self.omega_est              = state_est_kp1[self.oidx] # omega_est_bar_kp1
+        self.global_quat_est        = quat_est_kp1 # global quaternion estimate after discrete-time propagation
+        self.state_est              = state_est_kp1 # update state estimate after discrete-time propagation, exclude delta Gibbs state
+        self.covar_est              = P_kp1 # covariance estimate
+        self.processed_meas         = True
 
     def mekf_reset(self):
         """ Function to reset the MEKF object """
