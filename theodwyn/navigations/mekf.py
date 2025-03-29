@@ -385,11 +385,14 @@ class MEKF(ThreadedNavigationBase):
             # 4) If first measurement is not set and measurement is ready, set first measurement
             # 5) If first measurement is set, process first measurement
             # 6) update az_el value in self 
-            if not self.frame_in is None:
-                
-                with self._instance_lock:
-                    frame_proc = self.frame_in.copy()
+            frame_proc, frame_id = None, None
+            with self._instance_lock:
+                if self.frame_in is not None:
+                    frame_proc = self.frame_in.copy()   
                     frame_id   = copy(self.frame_id)
+
+
+            if not frame_proc is None:
                 
                 img_input_h, img_input_w    = frame_proc.shape[0], frame_proc.shape[1]
                 if self.proj:
@@ -422,11 +425,10 @@ class MEKF(ThreadedNavigationBase):
                 infer_time              = infer_end - infer_start
                 if self.logger:
                     self.logger.write(f"Inferenced in {infer_time} seconds on Frame ID {frame_id}", process_name = self.process_name)
-                ort_sco_max_idx = np.max(ort_output_dict[self.score_key])
-                if ort_sco_max_idx < 0.9 and not self.first_meas_proc.is_set():
+                if not self.first_meas_proc.is_set() and np.max(ort_output_dict[self.score_key]) < 0.9:
                     if self.logger:
                         self.logger.write(f"Frame Inference Rejected on {frame_id}", process_name = self.process_name)
-                    self.frame_in   = None
+                    with self._instance_lock: self.frame_in   = None
                     continue
                 # measurement loop
                 try:
@@ -463,7 +465,7 @@ class MEKF(ThreadedNavigationBase):
                         proj_inf_bbox      = ort_box_m
                         proj_inf_kps_2D    = ort_kps_2D_int
                         proj_inf_img_bgr   = img_bgr_proj
-                        proj_img_idx       = copy(self.frame_id)
+                        proj_img_idx       = frame_id
                         pose_proj, _       = self.meas_fcn(pose_est, self.meas_az_el, self.kps3D, self.bearing_std, self.cam_offset)
                         q_proj, tr_proj    = pose_proj[3:], pose_proj[:3]
                         # project 3D keypoints to 2D
@@ -534,7 +536,8 @@ class MEKF(ThreadedNavigationBase):
                         self.logger.write( f"Inference Failed with Exception: {e}", process_name = self.process_name)
                         self.logger.write( f"Failed Inference for Image ID {frame_id}: total skipped count: {self.skipped}", process_name = self.process_name)
             
-            self.frame_in   = None # Let go of the frame after processing (or attempting to process it) #TODO: check this
+            if frame_proc is not None:
+                with self._instance_lock: self.frame_in   = None # Let go of the frame after processing (or attempting to process it) #TODO: check this
                 
 
     def spin_filter( self ) -> None:    
@@ -553,7 +556,7 @@ class MEKF(ThreadedNavigationBase):
                     self.first_meas_proc.set()
                     self.is_first_meas.clear()
                     if self.logger:
-                        self.logger.write(f"Filter initialized with {self.frame_id} image", process_name = self.process_name)
+                        self.logger.write(f"Filter initialized with an image", process_name = self.process_name)
                     
                     if self.est_csvw and self.csv_saving_queue: 
                         self.csv_saving_queue.put( 
@@ -707,8 +710,9 @@ class MEKF(ThreadedNavigationBase):
         """
         Retrieves return code and frame information
         """
-        self.frame_in       = image
-        self.frame_id       = img_cnt
+        with self._instance_lock:
+            self.frame_in       = image
+            self.frame_id       = img_cnt
         # if self.logger:
         #     self.logger.write(f"Frame Acquired: {self.frame_id}", process_name=self.process_name)
             
