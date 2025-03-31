@@ -1,0 +1,61 @@
+{
+    "navigation": {
+        "kps3D_path": "../theodwyn/navigations/soho_128.npy",
+        "kps_scale": 1, 
+        "num_kps": 40,
+        "model_path": "/home/saa4743/agnc_repos/krcnn_model_exports/test_010_soho_40kps/dropout_custom_krcnn_mbnv3_fpn_v2_last_epoch_test_010_soho_40kps.onnx",
+        "meas_model": "c++",
+        "filter_dt": 0.01,
+        "meas_dt": 0.1,
+        "process_noise_std": 0.01,
+        "meas_noise_std": 0.05,
+        "max_flip_deg": 45,
+        "tau": 1,
+        "Qpsd": 25,
+        "bearing_meas_std": 0.017453292519943295,
+        "omega0": [0, 0, 0],
+        "alpha0": [0, 0, 0],
+        "tr_co2cam_cbff": [0,0,0],
+        "pose0": [0, 0, 25, 1, 0, 0, 0],
+        "img_in_size": [512, 512],
+        "imgnet_norm": false,
+        "pad_color": [0, 0, 0],
+        "box_key": "boxes",
+        "label_key": "labels",
+        "score_key": "scores",
+        "kps_key": "keypoints",
+        "kscore_key": "keypoint_scores",
+        "outkeys": ["boxes", "labels", "scores", "keypoints", "keypoint_scores"],
+        "Kmat": [[711.111083984375, 0.0, 256.0], [0.0, 711.111083984375, 256.0], [0.0, 0.0, 1.0]],
+        "fl_mm": 50,
+        "sw_mm": 36,
+        "sh_mm": 24,
+        "pnp_flag": 1, 
+
+        "image_prefix": "image_", 
+        "source_mode": "offline",
+        "image_dir": "/media/saa4743/Extreme SSD/soho_trajectories/subset_midLighting_scaled_jpsmooth2_trajectory", 
+        "proj_path": "data"
+    },
+
+    "camera" : {
+        "resolution" : [1936,1216],
+        "stream_resolution" : [320,256],
+        "fps" : 30,
+        "aeg_settings" : {
+            "ag_max_limit"  : 10,
+            "ae_max_limit"  : 100000,
+            "exposure"      : 50000,
+            "gain"          : 0
+        },
+        "awb_settings" : {
+            "wb_coef_red"   : 1.0,
+            "wb_coef_green" : 1.0,
+            "wb_coef_blue"  : 1.0
+        },
+        "gstream_config" : {
+            "sink_port" : "4444",
+            "sink_ip"   : "224.0.0.1"
+        }
+    }
+}

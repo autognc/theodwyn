@@ -12,11 +12,13 @@ class CSVInterpreter( GuidanceBase ):
     csv_handler         : Optional[CSVReader]  = None # TODO: Fix this 
     traj_start_time     : Optional[float]      = None
     csv_trajfilename    : str 
+    time_keyname        : str
 
     def __init__(
         self,
-        csv_trajfilename    : Optional[str]    = None,
-        logger              : Optional[Logger] = None, 
+        csv_trajfilename    : Optional[str]     = None,
+        time_keyname        : Union[str,int]    = "time",
+        logger              : Optional[Logger]  = None, 
         **kwargs,
     ):
         super().__init__(
@@ -25,6 +27,7 @@ class CSVInterpreter( GuidanceBase ):
         if not csv_trajfilename is None: 
             self.csv_handler = CSVReader(filename=csv_trajfilename)
             self.csv_trajfilename = csv_trajfilename
+        self.time_keyname = time_keyname
         self.load( **kwargs )
     
     def init_guidance( self ):
@@ -56,7 +59,6 @@ class CSVInterpreter( GuidanceBase ):
 
     def determine_guidance( 
         self,
-        time_keyname : Union[str,int] = "time" 
     ) -> Optional[ Union[ List[float], NDArray ] ]:
     
         csv_data_t = self.csv_handler.read_nextrow()
@@ -65,9 +67,9 @@ class CSVInterpreter( GuidanceBase ):
 
         if self.traj_start_time is None: self.traj_start_time = perf_counter()
 
-        if time_keyname in csv_data_t: 
+        if self.time_keyname in csv_data_t: 
             curr_time = perf_counter() - self.traj_start_time
-            while float(csv_data_t[time_keyname]) < curr_time:
+            while float(csv_data_t[self.time_keyname]) < curr_time:
                 csv_data_t = self.csv_handler.read_nextrow()
                 if csv_data_t is None: 
                     return None

@@ -26,7 +26,7 @@ if __name__ == "__main__":
     config.camera_classes = XIMEA
     config.network_classes = [ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,SabertoothSimpleSerial,ViconConnection]
 
-    with DebugImColl( config=config, verbose=False ) as theo_stack:
+    with DebugImColl( config=config, cntrl_factor=1,  verbose=False ) as theo_stack:
         while True:
             sleep(10)
             if theo_stack.sigterm.is_set():

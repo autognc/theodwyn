@@ -172,7 +172,7 @@ class D455(ThreadedLidarCameraBase):
             self.stream_channel = int( not bool(self.stream_channel) )
 
 
-    def get_frame( self ) -> Tuple[ cv.typing.MatLike, cv.typing.MatLike ]:
+    def get_frame( self ) -> Tuple[ NDArray, NDArray ]:
         """
         Retrieves return code and frame information
         """

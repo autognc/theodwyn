@@ -40,18 +40,48 @@
         "aeg_settings" : {
             "ag_max_limit"  : 10,
             "ae_max_limit"  : 100000,
-            "exposure"      : 50000,
+            "exposure"      : 100000,
             "gain"          : 0
         },
         "awb_settings" : {
             "wb_coef_red"   : 1.0,
             "wb_coef_green" : 1.0,
             "wb_coef_blue"  : 1.0
-        },
-        "gstream_config" : {
-            "sink_port" : "4444",
-            "sink_ip"   : "224.0.0.1"
         }
     },
-    "controller" : {}
+    "guidance" : {},
+    "controller" : {},
+    "navigation": {
+	    "kps_scale" : 0.05,
+        "num_kps": 40,
+        "meas_model": "c++",
+        "filter_dt": 0.02,
+        "meas_dt": 0.1,
+        "process_noise_std": 0.01,
+        "meas_noise_std": 0.05,
+        "max_flip_deg": 45,
+        "tau": 1,
+        "Qpsd": 25,
+        "bearing_meas_std": 0.017453292519943295,
+        "omega0": [0, 0, 0],
+        "alpha0": [0, 0, 0],
+        "tr_co2cam_cbff": [0,0,0],
+        "pose0": [0, 0, 25, 1, 0, 0, 0],
+        "img_in_size": [512, 512],
+        "imgnet_norm": false,
+        "pad_color": [0, 0, 0],
+        "box_key": "boxes",
+        "label_key": "labels",
+        "score_key": "scores",
+        "kps_key": "keypoints",
+        "kscore_key": "keypoint_scores",
+        "outkeys": ["boxes", "labels", "scores", "keypoints", "keypoint_scores"],
+        "Kmat": [[711.111083984375, 0.0, 256.0], [0.0, 711.111083984375, 256.0], [0.0, 0.0, 1.0]],
+        "fl_mm": 6,
+        "sw_mm": 11.314,
+        "sh_mm": 7.12,
+        "pnp_flag": 1,
+        "image_prefix": "image_",
+        "source_mode": "offline"
+    }
 }

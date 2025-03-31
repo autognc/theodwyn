@@ -12,7 +12,6 @@ from theodwyn.networks.adafruit                 import Adafruit_PCA9685
 from theodwyn.networks.comm_prot                import ZMQDish
 from theodwyn.networks.sabertooth               import SabertoothSimpleSerial
 from theodwyn.networks.vicon                    import ViconConnection
-from theodwyn.networks.event_signal             import SingleEventSignal
 from theodwyn.controllers.viconfeedback         import ViconFeedback, VFB_Setpoints
 from theodwyn.guidances.presets                 import Preset2DShapes
 from theodwyn.data.writers                      import CSVWriter
@@ -20,15 +19,13 @@ from theodwyn.utils.rotations                   import Rot_123
 from theodwyn.utils.data_format                 import wrap_to_pi
 from theodwyn.manipulators.mechanum_wheel_model import Mechanum4Wheels
 from theodwyn.navigations.mekf                  import MEKF
-from typing                                     import Optional, List, Union
+from typing                                     import Optional, List, Union, Any
 from time                                       import time, sleep, perf_counter
 from queue                                      import Queue
 from rohan.utils.timers                         import IntervalTimer
 from copy                                       import deepcopy
 SQRT2O2                 = sqrt(2)/2
 DEBUGGING               = False
-SINGLE_RUN              = True
-HSI_INLOOP              = False
 
 # TODO: PARSE THE FOLLOWING SETTINGS
 # >> CALIBRATED MOTOR CONSTANTS
@@ -36,7 +33,7 @@ LX                      = 0.165
 LY                      = 0.11
 WRADIUS                 = 0.075
 TS_CONST                = 17.224737008062963 # [rad/s]
-EULER_ORIENTATION_INIT  = [ 0., 0., 0. ] # XYZ Sequence
+EULER_ORIENTATION_INIT  = [ 0., 0., -pi ] # XYZ Sequence
 AUTO_THROTTLE_THRES     = 0.7
 
 # >> MANUAL CONTROL PREFERENCES
@@ -80,20 +77,14 @@ CSV_FIELDNAMES      = [
     f"k_{RECORD_OBJECT_2}"
 ]
 
-# >> GUIDANCE STANDBY MODES
-GSB_NOT             = "0"
-GSB_WAIT_HSI        = "1"
-GSB_WAIT_ALGN       = "2"
-GSB_WAIT_INFR       = "3"
-
-class EomerStack(ThreadedStackBase):
+class CollectionStack(ThreadedStackBase):
     """
     Eomer's Stack
     :param config: The stack configuration whose format can be found at .data.classes
     :param spin_intrvl: Inverse-frequency of spinning loop
     :param cntrl_factor: Factor relating controller input to servo angle changes
     """
-    process_name    : str = "Eomer Stack"
+    process_name    : str = "Debug Image Collection Stack"
 
     verbose         : bool
     cntl_factor     : float
@@ -102,13 +93,12 @@ class EomerStack(ThreadedStackBase):
     control_mode    : bool              = False # (False->Manual, True->Auto)
     rotation_matrix : NDArray           = np.identity(2)
     guidance_ready  : bool              = False
-    guidance_standby: int               = GSB_NOT
+    guidance_standby: bool              = False
     processing_queue: Queue
-    count           : int               = 0
+    count           : int     = 0
     image_path      : str
-    vicon_csv_path  : str 
-    vicon_csv_fn    : str
-    target_pnt      : Optional[NDArray] = None
+    vicon_csv_path      : str 
+    vicon_csv_fn          : str
     
     def __init__( 
         self, 
@@ -189,12 +179,12 @@ class EomerStack(ThreadedStackBase):
 
     def process( 
         self, 
-        network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,ViconConnection,SingleEventSignal]] ] = None, 
-        camera     : Optional[XIMEA]                                                                                            = None, 
-        controller : Optional[ViconFeedback]                                                                                    = None,
-        guidance   : Optional[Preset2DShapes]                                                                                   = None, 
-        navigation : Optional[MEKF]                                                                                             = None,
-        logger     : Optional[Logger]                                                                                           = None
+        network    : Optional[ List[Union[ZMQDish,Adafruit_PCA9685,SabertoothSimpleSerial,ViconConnection]] ]   = None, 
+        camera     : Optional[XIMEA]                                                                              = None, 
+        controller : Optional[ViconFeedback]                                                                    = None,
+        guidance   : Optional[Preset2DShapes]                                                                   = None, 
+        navigation : Optional[MEKF]                                                                             = None,
+        logger     : Optional[Logger]                                                                           = None
     ) -> None:
         """
         > Networks
@@ -203,28 +193,26 @@ class EomerStack(ThreadedStackBase):
             2 : Sabertooth 2x12
             3 : Sabertooth 2x12
             4 : ViconConnection
-            5 : SingleEventSignal
         > Cameras:
-              : Ximea
+            1 : Ximea (NOT INTEGRATED)
         > Controllers:
-              : Vicon Feedback
-        > Guidances:
-              : CSVInterpreter/Preset2DShape
-        > Navigations:
-              : MEKF 
+            1 : Vicon Feedback
         """
-        frame, camera_command, wheel_throttles = None, None, [ 0. , 0. , 0. , 0. ]
-
-        # >>>>>>>>>>>>>>>>>>>>>>>> Relative Navigation and Camera Functionality
-
-        if ( self.guidance_standby is GSB_WAIT_INFR ) or self.guidance_ready: 
+        frame   = None
+        camera_command, wheel_throttles = None, [ 0. , 0. , 0. , 0. ]
+        if self.guidance_standby or self.guidance_ready: 
             frame   = camera.get_frame()
             navigation.pass_in_frame( image = frame, img_cnt = self.count )
+            # pass frame and img_fp/img_fn for MEKF
 
         # >>>>>>>>>>>>>>>>>>>>>>>>> Manual Control Functionality
 
         if network[0]:
             _, xwc_input = network[0].recv()
+
+            if not self.control_mode and xwc_input is None:
+                # >> Stop/Slow motors
+                wheel_throttles = [ 0. , 0. , 0. , 0. ]
 
             if not xwc_input is None:
                 # >> Spin-Down Stack from Controller
@@ -243,10 +231,11 @@ class EomerStack(ThreadedStackBase):
                         self.holding_buttons[1] = True
                         self.held_buttons[1]    = time()
                     if time() - self.held_buttons[1] > TRIGGER_HOLDTIME and self.control_switch.check_interval(): 
-                        self.control_mode       = not self.control_mode
-                        self.guidance_ready     = False
-                        self.guidance_standby   = GSB_NOT
-                        if guidance: guidance.reset_guidance()
+                        self.control_mode = not self.control_mode
+                        if self.guidance_ready: 
+                            self.guidance_ready     = False
+                            self.guidance_standby   = False
+                            if guidance: guidance.reset_guidance()
                         if logger:
                             mode = "Manual" if not self.control_mode else "Auto"
                             logger.write( f"Switching Mode to : {mode}", self.process_name )
@@ -280,47 +269,33 @@ class EomerStack(ThreadedStackBase):
         if self.control_mode and controller and guidance:
             set_points  = VFB_Setpoints()
             
-            if HSI_INLOOP and ( self.guidance_standby is GSB_WAIT_HSI ) and network[5]:
-                _, data_in = network[5].recv()
-                if not data_in is None:
-                    self.target_pnt       = np.array([*data_in])
-                    self.guidance_standby = GSB_WAIT_ALGN
-                    if logger:
-                        logger.write(
-                            f"Friendly HSI Informed us that the target is around -> {self.target_pnt}",
-                            self.process_name
-                        )
-                        logger.write(
-                            f"Autonomous Guidance is now waiting for camera alignment",
-                            self.process_name
-                        )
-
-            if ( self.guidance_standby is GSB_WAIT_INFR ) and navigation.first_meas_proc.is_set():
-                self.guidance_standby   = GSB_NOT
+            if self.guidance_standby and navigation.first_meas_proc.is_set():
+                self.guidance_standby   = False
                 self.guidance_ready     = True 
                 if logger:
                     logger.write(
-                        f"Autonomous Guidance starting now",
+                        f"Autonomous Guidance starting NOW",
                         self.process_name
                     )
             
             if not self.guidance_ready:
-                if ( self.guidance_standby is GSB_NOT ):
+                if not self.guidance_standby:
                     guide = guidance.get_init_guidance()
                 else:
                     # NOTE: Robots will be sit in standby until guidance wait time has passed
+                    # NOTE: This is different than when guide is None
                     guide   = {} 
             else:                       
                 guide = guidance.determine_guidance()
             
 
-            if not guide is None:
-                pos_xy_vicon, ang_yaw_vicon = None, None
+            if not guide is None and not self.guidance_standby:
                 if 'x' in guide and 'y' in guide     : set_points.pos_xy  = np.array( [ float(guide['x'])  , float(guide['y'])   ] ).flatten()
                 if 'v_x' in guide and 'v_y' in guide : set_points.vel_xy  = np.array( [ float(guide['v_x']), float(guide['v_y']) ] ).flatten()
                 if 'yaw' in guide                    : set_points.ang_yaw = float(guide['yaw'])
                 if 'av_z'in guide                    : set_points.avel_z  = float(guide['av_z'])
                 
+                pos_xy_vicon, ang_yaw_vicon = None, None
 
                 if network[4]: 
 
@@ -345,41 +320,22 @@ class EomerStack(ThreadedStackBase):
                             self.processing_queue.put( (frame, merged_vicon_data, frame_n) )
 
                     # >>> VICON DATA PULL (2/2) -> For Camera Control
-                    if (self.guidance_standby is GSB_WAIT_ALGN) or self.guidance_ready: 
-                        cam_vicon_data  = network[4].recv_pose( object_name=CAMERA_NAME, ret_quat=False )
+                    cam_vicon_data  = network[4].recv_pose( object_name=CAMERA_NAME, ret_quat=False )
+                    trgt_vicon_data = network[4].recv_pose( object_name=TARGET_NAME, ret_quat=False )
 
-                        trgt_data_available = False
-                        if HSI_INLOOP and (not self.guidance_ready):
-                            if not ( self.target_pnt is None ):
-                                trgt_data_available = True
-                                target_pos          = self.target_pnt
-                        else:
-                            trgt_vicon_data = network[4].recv_pose( object_name=TARGET_NAME, ret_quat=False )
-                            if trgt_vicon_data.succeeded:
-                                trgt_data_available = True
-                                target_pos          = trgt_vicon_data.position + Rot_123(*trgt_vicon_data.orientation_euler).T @ TARGET_OFFSET
-                        
-
-                        if cam_vicon_data.succeeded and trgt_data_available:
-                            cam_rotm        = Rot_123(*cam_vicon_data.orientation_euler)
-                            cam_cp_pos      = cam_vicon_data.position + cam_rotm.T @ CAMERA_OFFSET
-                            cam2trgt_vff    = target_pos - cam_cp_pos
-                            camz_vff        = ( cam_rotm.T @ np.array( [0.,0.,1.] ) ).flatten()
-                            cam2trgt_vff_plnorm, camz_vff_plnorm = norm( cam2trgt_vff[0:2] ), norm( camz_vff[0:2] )
-                            set_points.ang_dpt = np.array(
-                                [
-                                    wrap_to_pi( atan2( cam2trgt_vff[1], cam2trgt_vff[0] )     - atan2( camz_vff[1], camz_vff[0] ) ),
-                                    wrap_to_pi( atan2( cam2trgt_vff[2], cam2trgt_vff_plnorm ) - atan2( camz_vff[2], camz_vff_plnorm ) )
-                                ]
-                            )
-                            if self.guidance_standby is GSB_WAIT_ALGN:
-                                if norm( set_points.ang_dpt, 2 ) < INIT_CAM_ANGLE_THRESHOLD:
-                                    self.guidance_standby   = GSB_WAIT_INFR
-                                    if logger:
-                                        logger.write(
-                                            f"Autonomous Guidance is now waiting for first inference",
-                                            self.process_name
-                                        )
+                    if cam_vicon_data.succeeded and trgt_vicon_data.succeeded:
+                        trgt_cp_pos     = trgt_vicon_data.position + Rot_123(*trgt_vicon_data.orientation_euler).T @ TARGET_OFFSET
+                        cam_rotm        = Rot_123(*cam_vicon_data.orientation_euler)
+                        cam_cp_pos      = cam_vicon_data.position + cam_rotm.T @ CAMERA_OFFSET
+                        cam2trgt_vff    = trgt_cp_pos - cam_cp_pos
+                        camz_vff        = ( cam_rotm.T @ np.array( [0.,0.,1.] ) ).flatten()
+                        cam2trgt_vff_plnorm, camz_vff_plnorm = norm( cam2trgt_vff[0:2] ), norm( camz_vff[0:2] )
+                        set_points.ang_dpt = np.array(
+                            [
+                                wrap_to_pi( atan2( cam2trgt_vff[1], cam2trgt_vff[0] )     - atan2( camz_vff[1], camz_vff[0] ) ),
+                                wrap_to_pi( atan2( cam2trgt_vff[2], cam2trgt_vff_plnorm ) - atan2( camz_vff[2], camz_vff_plnorm ) )
+                            ]
+                        )
 
                     # >>> DETERMINE GUIDANCE MODES
                     if vicon_data.succeeded: 
@@ -387,19 +343,17 @@ class EomerStack(ThreadedStackBase):
                         pos_xy_vicon    = 1E-3*np.array(vicon_data.position[0:2]).flatten()
                         ang_yaw_vicon   = vicon_data.orientation_euler[2]
 
-                        if ( self.guidance_standby is GSB_NOT ) and ( not self.guidance_ready ):
+                        if ( not self.guidance_ready ) and ( not set_points.ang_dpt is None ):
                             dist_2init = norm( set_points.pos_xy - 1E-3*np.array(vicon_data.position[0:2]), 2 ) 
                             dang_2init = abs( wrap_to_pi( set_points.ang_yaw - vicon_data.orientation_euler[2] ) ) 
-                            if dist_2init < INIT_DIST_THRESHOLD and dang_2init < INIT_ANGLE_THRESHOLD: 
-                                if HSI_INLOOP: 
-                                    self.guidance_standby = GSB_WAIT_HSI
-                                    if logger:
-                                        logger.write(
-                                            f"Autonomous Guidance is now waiting for HSI",
-                                            self.process_name
-                                        )
-                                else: 
-                                    self.guidance_standby = GSB_WAIT_ALGN
+                            cdang_2init= norm( set_points.ang_dpt, 2 )
+                            if dist_2init < INIT_DIST_THRESHOLD and dang_2init < INIT_ANGLE_THRESHOLD and cdang_2init < INIT_CAM_ANGLE_THRESHOLD:
+                                self.guidance_standby   = True
+                                if logger:
+                                    logger.write(
+                                        f"Autonomous Guidance will begin after first inference",
+                                        self.process_name
+                                    )
 
                         if not self.logged_startframe: 
                             self.logged_startframe = True    
@@ -430,11 +384,9 @@ class EomerStack(ThreadedStackBase):
                     camera_command  = [ degrees(dpt_cmd[0]), -degrees(dpt_cmd[1])  ]
             
             elif guide is None:
-                self.guidance_ready   = False
-                self.guidance_standby = GSB_NOT
                 if guidance                         : guidance.reset_guidance()
-                if SINGLE_RUN                       : self.sigterm.set() 
-
+                if self.guidance_ready              : self.guidance_ready   = False
+                if self.guidance_standby            : self.guidance_standby = False
         # >>>>>>>>>>>>>>>>>>>>>>>>> Send Throttle and Camera Commands Functionality
 
         if camera_command is not None and network[1]:

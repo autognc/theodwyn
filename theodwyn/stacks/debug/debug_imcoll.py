@@ -15,14 +15,14 @@ from theodwyn.networks.vicon                    import ViconConnection
 from theodwyn.data.writers                      import CSVWriter
 from theodwyn.manipulators.mechanum_wheel_model import Mechanum4Wheels
 from typing                                     import Optional, List, Union, Any
-from time                                       import time
+from time                                       import time, strftime
 from queue                                      import Queue
 from rohan.utils.timers                         import IntervalTimer
 from copy                                       import deepcopy
 
-TIME_AR     = "{:.0f}".format( time() )
+TIME_AR     = strftime("%Y-%m-%d_%H-%M-%S")
 HOME_DIR    = os.path.expanduser("~")
-SAVE_DIR    = f"run_{TIME_AR}"
+SAVE_DIR    = f"eomer_usb/run_{TIME_AR}"
 IMAGE_PATH1 = f"{HOME_DIR}/{SAVE_DIR}/MC"
 IMAGE_PATH2 = f"{HOME_DIR}/{SAVE_DIR}/SC"
 VICON_PATH1 = f"{HOME_DIR}/{SAVE_DIR}/MC"
@@ -33,28 +33,42 @@ TRIGGER_HOLDTIME  = [ 2. ]
 MAX_THROTTLE      = 0.50
 MAX_OMEGA         = 2*pi/5 # rad/s
 SQRT2O2           = sqrt(2)/2
-OBJECT1_NAME      = "eomer_cam"
-OBJECT2_NAME      = "soho"
-OBJECTS = [OBJECT1_NAME, OBJECT2_NAME]
+VICON_OBJ1      = "eomer_cam"
+VICON_OBJ2      = "soho"
+VICON_OBJ = [VICON_OBJ1, VICON_OBJ2]
 MAX_QUEUE_SIZE    = 100
 
 # DATA Collection constants
-MULTI_IMAGE_FOLDER  = f"{IMAGE_PATH1}/SOHO_Multi_image_Data"
-SINGLE_IMAGE_FOLDER = f"{IMAGE_PATH2}/SOHO_Single_image_Data"
-MULTI_VICON_FOLDER  = f"{VICON_PATH1}/SOHO_Multi_Vicon_Data"
-SINGLE_VICON_FOLDER = f"{VICON_PATH2}/SOHO_Single_Vicon_Data"
+MULTI_IMAGE_FOLDER  = f"{IMAGE_PATH1}/MC_Img_Data"
+SINGLE_IMAGE_FOLDER = f"{IMAGE_PATH2}/SC_Img_Data"
+MULTI_VICON_FOLDER  = f"{VICON_PATH1}/MC_Vicon_Data"
+SINGLE_VICON_FOLDER = f"{VICON_PATH2}/SC_Vicon_Data"
 if not os.path.exists(MULTI_IMAGE_FOLDER):  os.makedirs(MULTI_IMAGE_FOLDER,exist_ok=True)
 if not os.path.exists(SINGLE_IMAGE_FOLDER): os.makedirs(SINGLE_IMAGE_FOLDER,exist_ok=True)
 if not os.path.exists(MULTI_VICON_FOLDER):  os.makedirs(MULTI_VICON_FOLDER,exist_ok=True)
 if not os.path.exists(SINGLE_VICON_FOLDER): os.makedirs(SINGLE_VICON_FOLDER,exist_ok=True)
 CSV_FILENAME_MC    = f"{MULTI_VICON_FOLDER}/vicon_mc_{TIME_AR}.csv" 
 CSV_FILENAME_SC    = f"{SINGLE_VICON_FOLDER}/vicon_sc_{TIME_AR}.csv"
-# TODO: Add a fieldname creator that is agnostic to the number of objects
-CSV_FIELDNAMES_MC  = ["Set","ID",f"x_mm_{OBJECT1_NAME}",f"y_mm_{OBJECT1_NAME}",f"z_mm_{OBJECT1_NAME}",
-                      f"w_{OBJECT1_NAME}",f"i_{OBJECT1_NAME}",f"j_{OBJECT1_NAME}", f"k_{OBJECT1_NAME}",
-                        f"x_mm_{OBJECT2_NAME}",f"y_mm_{OBJECT2_NAME}",f"z_mm_{OBJECT2_NAME}",
-                      f"w_{OBJECT2_NAME}",f"i_{OBJECT2_NAME}",f"j_{OBJECT2_NAME}", f"k_{OBJECT2_NAME}"]
+CSV_FIELDNAMES_MC  = [
+    "Set",
+    "ID",
+    f"x_mm_{VICON_OBJ1}",
+    f"y_mm_{VICON_OBJ1}",
+    f"z_mm_{VICON_OBJ1}",
+    f"w_{VICON_OBJ1}",
+    f"i_{VICON_OBJ1}",
+    f"j_{VICON_OBJ1}", 
+    f"k_{VICON_OBJ1}",
+    f"x_mm_{VICON_OBJ2}",
+    f"y_mm_{VICON_OBJ2}",
+    f"z_mm_{VICON_OBJ2}",
+    f"w_{VICON_OBJ2}",
+    f"i_{VICON_OBJ2}",
+    f"j_{VICON_OBJ2}", 
+    f"k_{VICON_OBJ2}"
+]
 CSV_FIELDNAMES_SC  = CSV_FIELDNAMES_MC[1:]
+
 
 class DebugImColl(ThreadedStackBase):
     """
@@ -122,10 +136,10 @@ class DebugImColl(ThreadedStackBase):
 
                         if not self.capture_switch.is_set():
                             # SAVE IMAGE AND CSV
-                            multi_image_captured = cv2.imwrite(f"{MULTI_IMAGE_FOLDER}/Set_{str(set).zfill(5)}_XIMEAmulticapture_{str(count_multi+1).zfill(5)}.jpg", frame)
+                            multi_image_captured = cv2.imwrite(f"{MULTI_IMAGE_FOLDER}/set_{str(set).zfill(5)}_ximea_mc_{str(count_multi).zfill(5)}.png", frame)
                             vicon_data_out = [  
                                 str(set).zfill(5),
-                                f"{str(count_multi+1).zfill(5)}",
+                                f"{str(count_multi).zfill(5)}",
                                 *merged_vicon_data[0],
                                 *merged_vicon_data[1]
                             ]
@@ -144,16 +158,16 @@ class DebugImColl(ThreadedStackBase):
                             self.capture_switch.clear() 
                             self.capture_flag.clear()
 
-                            single_image_captured = cv2.imwrite(f"{SINGLE_IMAGE_FOLDER}/_XIMEAsinglecapture_{str(count_single+1).zfill(5)}.jpg", frame)
+                            single_image_captured = cv2.imwrite(f"{SINGLE_IMAGE_FOLDER}/ximea_sc_{str(count_single).zfill(5)}.png", frame)
                             vicon_data_out = [  
-                                f"{str(count_single+1).zfill(5)}",
+                                f"{str(count_single).zfill(5)}",
                                 *merged_vicon_data[0],
                                 *merged_vicon_data[1]
                             ]
                             csv_writer_sc.write_data(vicon_data_out)
 
                             if single_image_captured:  
-                                ret_msg = f"Image {count_single +1} captured"
+                                ret_msg = f"Image {count_single} captured"
                             else:
                                 ret_msg = f"Image set not captured"
                             self.logger.write( ret_msg, process_name=self.process_name)
@@ -169,10 +183,10 @@ class DebugImColl(ThreadedStackBase):
         logger     : Optional[Logger]                                                                           = None
     ) -> None:
         
-        def get_objects_vicondata() -> None:
-            merged_data = len(OBJECTS)*[None]
+        def get_vicondata() -> None:
+            merged_data = len(VICON_OBJ)*[None]
             succeeded = True
-            for i,object_name in enumerate(OBJECTS):
+            for i,object_name in enumerate(VICON_OBJ):
                 vicon_data      = deepcopy( network[4].recv_pose( object_name=object_name ) )
                 merged_data[i]  = [ *vicon_data.position, *vicon_data.orientation_quat ]
                 if succeeded and not vicon_data.succeeded: 
@@ -185,7 +199,7 @@ class DebugImColl(ThreadedStackBase):
             frame = camera.get_frame()
 
             if len(network)>4 and network[4]: # isinstance( network[4], ViconConnection ):
-                merged_vicon_data, succeeded = get_objects_vicondata()
+                merged_vicon_data, succeeded = get_vicondata()
                 if succeeded: 
                     self.processing_queue.put( (frame, merged_vicon_data) )                    
 

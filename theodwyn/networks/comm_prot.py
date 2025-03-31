@@ -73,6 +73,7 @@ class ZMQDish( _ZMQThreadedConnection ):
     data         : Optional[List[float]]         = None
     btopic       : Optional[List[float]]         = None
     timeo        : int                           = 100
+    log_timeo    : bool                          = True
 
     def __init__(
         self,
@@ -80,6 +81,7 @@ class ZMQDish( _ZMQThreadedConnection ):
         data_format : str,
         timeo       : int               = 1000,
         topic       : str               = "unnameddrtopic",
+        log_timeo   : bool              = True,
         logger      : Optional[Logger]  = None
     ):
         super().__init__(
@@ -91,13 +93,14 @@ class ZMQDish( _ZMQThreadedConnection ):
         ) 
         self.process_name   = f"{self.process_name} to {topic}"
         self.timeo          = timeo
+        self.log_timeo      = log_timeo
         self.add_threaded_method( target=self.spin )
 
     def connect(self):
         """
         Connects to ZMQ socket at provided address on provided topic
         """
-        self.context = zmq.Context.instance()
+        self.context = zmq.Context()
         self.socket  = self.context.socket( self.socket_type )
         self.socket.setsockopt(zmq.LINGER,0)
         self.socket.setsockopt(zmq.CONFLATE,1)
@@ -121,7 +124,7 @@ class ZMQDish( _ZMQThreadedConnection ):
                     self.btopic = decoded_btopic 
                     self.data   = struct.unpack( self.data_format, data_buffer )
             else:
-                if isinstance(self.logger,Logger): 
+                if self.log_timeo and self.logger: 
                     self.logger.write(
                         f'Timed out with no message recieved ... continuing',
                         process_name=self.process_name

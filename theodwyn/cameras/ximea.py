@@ -5,6 +5,7 @@ from copy                               import deepcopy
 from rohan.common.base_cameras          import ThreadedCameraBase
 from rohan.common.logging               import Logger
 from rohan.common.type_aliases          import Config, Resolution
+from rohan.utils.timers                 import IntervalTimer
 from typing                             import TypeVar, Optional, Tuple, Dict
 from numpy.typing                       import NDArray
 
@@ -24,16 +25,19 @@ class XIMEA(ThreadedCameraBase):
     process_name     : str                      = "XIMEA xiC camera (threaded)"
     
     # Capture object used to connect to ximea I/O
-    capture_obj      : Optional[xiapi.Camera]    = None
-    aeg_settings     : Optional[Dict[str,int]]   = None
-    awb_settings     : Optional[Dict[str,int]]   = None
+    capture_obj      : Optional[xiapi.Camera]       = None
+    aeg_settings     : Optional[Dict[str,int]]      = None
+    awb_settings     : Optional[Dict[str,int]]      = None
     
     # Stream object used to stream camera data
-    stream_obj       : Optional[cv.VideoWriter] = None
-    gstream_pipeline : Optional[str]            = None
-    stream_channel   : int                      = 0
-    stream_resolution: Optional[Resolution]     = None
-    frame_data       : Optional[NDArray]        = np.zeros((1280,800))
+    stream_obj          : Optional[cv.VideoWriter] = None
+    gstream_pipeline    : Optional[str]            = None
+    stream_channel      : int                      = 0
+    stream_resolution   : Optional[Resolution]     = None
+    frame_instance      : xiapi.Image
+    frame_data          : Optional[NDArray]
+    stream_timer        : IntervalTimer
+
 
     def __init__(
         self,
@@ -52,14 +56,19 @@ class XIMEA(ThreadedCameraBase):
             fps=fps,
             logger=logger
         )
-        self.aeg_settings = aeg_settings
-        self.awb_settings = awb_settings
-        self.stream_resolution = stream_resolution if not stream_resolution is None else resolution
+        self.aeg_settings           = aeg_settings
+        self.awb_settings           = awb_settings
+        self.stream_resolution      = stream_resolution if not stream_resolution is None else resolution
+        self.frame_instance         = xiapi.Image()
+        self.frame_data             = np.zeros( resolution )
+        self.stream_timer           = IntervalTimer( interval=1/fps )
         self.load( 
             gstream_config=gstream_config,
             **config_kwargs 
         )
         self.add_threaded_method( target=self.spin )
+        if not self.gstream_pipeline is None:
+            self.add_threaded_method( target=self.spin_stream )
 
     def load( 
         self, 
@@ -144,7 +153,7 @@ class XIMEA(ThreadedCameraBase):
 
         self.capture_obj.start_acquisition()
 
-        if self.gstream_pipeline is not None:
+        if not self.gstream_pipeline is None:
             if isinstance( self.stream_obj, cv.VideoWriter ):
                 self.stream_obj.release()
             self.stream_obj = cv.VideoWriter( 
@@ -180,27 +189,31 @@ class XIMEA(ThreadedCameraBase):
         Threaded Process: Reads camera data and streams it according to provided gstreamer config
         """
         while not self.sigterm.is_set():
-            frame = None
             try:
-                if isinstance( self.capture_obj, xiapi.Camera ):
-                    frame = xiapi.Image()
-                    self.capture_obj.get_image(frame)
+                if self.capture_obj:
+                    self.capture_obj.get_image(self.frame_instance)
+                    numpy_data = self.frame_instance.get_image_data_numpy()
                     with self._instance_lock:
-                        self.frame_data    = frame.get_image_data_numpy()
+                        self.frame_data = numpy_data
                         
             except Exception as e:
-                if isinstance(self.logger,Logger):
+                if self.logger:
                     self.logger.write( f"Failed with Exception: {e}", process_name=self.process_name )
-                frame   = None
-        
-            if frame is not None and isinstance( self.stream_obj, cv.VideoWriter ):
-                if self.stream_obj.isOpened():
-                    with self._instance_lock:
-                            self.stream_obj.write( image=cv.resize( self.frame_data, self.stream_resolution) )
 
-    def get_frame( self ) -> Tuple[ cv.typing.MatLike, cv.typing.MatLike ]:
+    
+    def spin_stream( self ):    
+        while not self.sigterm.is_set():
+            if self.stream_obj.isOpened(): 
+                self.stream_timer.await_interval()
+                with self._instance_lock: 
+                    frame_data = self.frame_data.copy()
+                self.stream_obj.write( image=cv.resize( frame_data, self.stream_resolution) )
+
+
+    def get_frame( self ) -> NDArray:
         """
         Retrieves return code and frame information
         """
         with self._instance_lock:
-            return deepcopy( self.frame_data )
+            frame_data = self.frame_data.copy()
+        return frame_data
